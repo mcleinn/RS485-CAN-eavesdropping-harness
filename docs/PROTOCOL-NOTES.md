@@ -153,11 +153,14 @@ Real captures and hard-won experience — several are decisive:
   "Battery Compatibility" document** (Sunsynk_BatteryCompatibility_v16) and
   the sunsky/deye comms protocol — that's where riogrande75 and others
   finally found it. (We already have the equivalent in the V3.5 design doc.)
-- **Inverter firmware is a recurring fix**: multiple Voltronic/Axpert
-  owners only got the BMS recognized after updating the display MCU to
-  **U2 = 12.21** ("inverter didn't accept my commands until I updated U2 to
-  12.21 - it was a firmware problem on the inverter"). Check the SAKO's U2
-  version and look for an update if frames are correct but ignored.
+- **Inverter firmware can be the fix** (general lesson, not a specific
+  number): several Voltronic/Axpert owners only got the BMS recognized
+  after a display-MCU firmware update ("didn't accept my commands until I
+  updated - it was a firmware problem on the inverter"). ⚠️ Their "U2 =
+  12.21" is a *different* Axpert-clone versioning scheme and does NOT map
+  to this SAKO, which reports **U1 V85.00 / U2 V46.04**. Takeaway: if the
+  frames look correct but the SAKO ignores them, ask SAKO whether a newer
+  U1/U2 exists — don't chase the 12.21 number.
 - **Seplos BMS 3.0 (V3) implements the Voltronic 0x61/0x62/0x63 queries by
   default**; setting the BMS RS485 protocol to "Pylontech" made an FSP/
   Voltronic 15 kW inverter communicate immediately, no BMS firmware update
@@ -179,28 +182,34 @@ Real captures and hard-won experience — several are decisive:
 
 ## Physical layer / cabling (top suspects for "battery not recognized")
 
-⚠️ **Two conflicting sources for the Seplos-side port — test both.**
-- Forum reports (RS485-variant BMS boards): the inverter-comms socket is
-  the RJ45 labelled "CAN", carrying RS485-A on pin 4, RS485-B on pin 5,
-  GND 3/6; RS485-1/RS485-2 are pack-interlink/PC only.
+**Authoritative for this pack = the Mason 280L 3.0 spec sheet.**
 - **Official Mason 280L (3.0) pack specification** (docs/refs/
-  mason280l-spec.txt): the CAN socket is CAN-only (4 = CAN-H, 5 = CAN-L,
+  mason280l-spec.txt): the CAN socket is CAN-only (**4 = CAN-H, 5 = CAN-L**,
   3/6 GND, 1/2/7/8 NC) and the **RS485 sockets carry A on pins 2/7, B on
   pins 1/8, GND 3/6, pins 4/5 dangling**, 19200 baud (native Modbus).
-  If the PYLON-RS485 inverter mode is served on these sockets, the cable
-  is Seplos 2/7→SAKO 5 (A), Seplos 1/8→SAKO 3 (B).
-- **Forum resolution** (DIY 47948, user sergea, RS485-version BMS): the
-  **left port is the inverter port** and is CAN *or* RS485 depending on the
-  BMS hardware variant — **check the sticker for "C" (CAN) or "D" (RS485)**;
-  the two right-hand ports are dedicated battery-to-battery RS485. Confirmed
-  working pinout: **BMS 4=A(white), 5=B(brown), 3/6=GND → INV 3=B(brown),
-  5=A(white), 8=GND**; GND optional but helps in noisy conditions. Some
-  RS485 packs have dedicated Voltronic firmware and work **only on RS485A**.
+  On this pack pins 4/5 are CAN, never RS485 A/B.
+- **For THIS pack (Mason 280L 3.0) the official spec is authoritative**:
+  pins **4 = CAN-H, 5 = CAN-L** on the CAN socket (NOT RS485 A/B), and the
+  RS485-to-inverter link is on the **RS485 sockets: 2/7 = A, 1/8 = B,
+  3/6 = GND, 4/5 dangling**. So the inverter cable is **Seplos 2/7 → SAKO 5
+  (A), Seplos 1/8 → SAKO 3 (B), GND 3/6 → SAKO 8**.
+- ⚠️ The DIY Solar "BMS 4=A / 5=B" pinout (thread 47948, user sergea) is a
+  **different/older Seplos RS485-board generation** — it does NOT apply to
+  the Mason 280L 3.0. Don't use pins 4/5 for RS485 on this pack; on it 4/5
+  are CAN. (Kept only as evidence that Seplos board pinouts vary by
+  generation — always trust the specific pack's spec sheet.)
+- That thread's other point still holds generally: on multi-socket Seplos
+  boards the inverter port is one dedicated socket and its physical layer
+  (CAN vs RS485) depends on the board variant; some RS485 packs have
+  dedicated Voltronic firmware.
 - Resolution: run `rsh identify` against **each socket** (it scans 9600 &
   19200 and both protocols) — the wire settles what the labels won't.
 - **SAKO/Voltronic BMS RJ45**: RS485-B pin 3, RS485-A pin 5, GND 7/8.
-- → A straight patch cable connects nothing useful. Build crossover:
-  Seplos 4 → SAKO 5 (A), Seplos 5 → SAKO 3 (B), Seplos 3/6 → SAKO 7/8 (GND).
+- → A straight patch cable connects nothing useful. Crossover for the
+  Mason 280L 3.0 RS485 socket → SAKO: **Seplos 2/7 (A) → SAKO 5 (A),
+  Seplos 1/8 (B) → SAKO 3 (B), Seplos 3/6 (GND) → SAKO 7/8 (GND)**.
+  (Note: A-to-A, B-to-B here because both sides name their own A/B — it is
+  not a straight cable because the pin numbers differ, 2/7↔5 and 1/8↔3.)
 - A/B polarity swap is harmless to try; 120 Ω termination only at the two
   physical bus ends; RS485 without bias floats when idle → garbage bytes.
 - Inverter menu: try program 05 = `Li` → program 36 = `L01`, and `LIB`

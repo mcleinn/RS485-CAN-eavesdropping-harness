@@ -311,8 +311,10 @@ def identify(link: Link, session: SessionWriter, chan: str = "id",
     if not report["verdicts"]:
         report["verdicts"].append(
             "SILENCE: nothing heard and nothing answered at any baud. "
-            "Check physical layer first: right socket (Seplos: the RJ45 "
-            "labelled CAN carries RS485 on pins 4/5), A/B polarity, "
-            "crossover pinout, device actually powered/enabled.")
+            "Check physical layer first: correct inverter socket for THIS "
+            "battery (pinout varies by generation - on the Mason 280L 3.0 "
+            "RS485 is on the RS485 sockets, A=2/7 B=1/8, while pins 4/5 are "
+            "CAN), A/B polarity, crossover pinout, device powered/enabled. "
+            "Try each socket.")
     session.note("identify done: " + " | ".join(report["verdicts"]), chan)
     return report

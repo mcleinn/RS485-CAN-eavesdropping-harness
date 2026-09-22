@@ -105,9 +105,11 @@ def analyze(path: Path | str) -> dict:
         if c["frames"] == 0 and c["raw_bytes"] == 0:
             find("H1-silence", "fail",
                  f"[{chan}] nothing on the wire at all - wrong socket, dead "
-                 f"cable, A/B swap, or device not transmitting. On the "
-                 f"Seplos side remember: the inverter port is the RJ45 "
-                 f"labelled CAN (RS485 on pins 4/5).")
+                 f"cable, A/B swap, or device not transmitting. Check the "
+                 f"battery's spec sheet for the correct inverter socket and "
+                 f"pinout (it varies by Seplos generation - on the Mason "
+                 f"280L 3.0, RS485 is on the RS485 sockets pins 2/7=A, "
+                 f"1/8=B; pins 4/5 are CAN). Try each socket with identify.")
 
     # H2: garbage classifier (wrong baud etc.)
     for chan, c in chans.items():

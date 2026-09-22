@@ -25,9 +25,13 @@ machine-readable output. Humans can drive everything from `rsh menu`.
 
 ## Strategy for the SAKO ↔ Seplos problem
 
-Wiring context (from research; details in `PROTOCOL-NOTES.md`):
-Seplos inverter port = RJ45 labelled **CAN** (A=4, B=5); SAKO BMS port:
-B=3, A=5; needs a crossover cable. Battery DIP1 ON (pack 1), power-cycled.
+Wiring context (per the Mason 280L 3.0 spec sheet; details in
+`PROTOCOL-NOTES.md`): on this pack the CAN socket is CAN-only (pins 4/5 =
+CAN-H/CAN-L), and RS485 is on the **RS485 sockets: A=2/7, B=1/8, GND=3/6**.
+SAKO BMS port: B=3, A=5, GND=7/8. Crossover: Seplos 2/7→SAKO 5 (A),
+Seplos 1/8→SAKO 3 (B), GND→8. But which Seplos socket actually serves the
+PYLON-to-inverter link isn't settled by the spec — run `rsh identify` on
+each socket to find out. Battery DIP1 ON (pack 1), power-cycled.
 
 ### Day 0 (no adapter yet) — all simulated
 ```
