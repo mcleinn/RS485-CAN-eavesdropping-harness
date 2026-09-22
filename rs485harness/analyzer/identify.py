@@ -188,12 +188,11 @@ def identify(link: Link, session: SessionWriter, chan: str = "id",
             if "voltronic-lib" in maps:
                 advice = (" -> This side speaks the Voltronic 'LIB' register "
                           "protocol, NOT Pylontech ASCII. If this is the "
-                          "inverter with 'PYL' selected, its PYL is "
-                          "effectively LIB: either switch the battery to its "
-                          "Voltronic/LIB profile, or find an inverter "
-                          "protocol setting that produces Pylontech-ASCII "
-                          "polls (try Li + program 36 = L01), or bridge-"
-                          "translate.")
+                          "inverter, its selected battery type maps to LIB, "
+                          "not PYL: either set the inverter battery type "
+                          "(program 05) to 'PYL' so it polls Pylontech-ASCII, "
+                          "or switch the battery to its Voltronic/LIB "
+                          "profile, or bridge-translate.")
             elif "seplos-v3-native" in maps:
                 advice = (" -> Seplos-native Modbus (PC/monitor protocol). "
                           "If this is the battery's port, you are on the "

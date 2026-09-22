@@ -204,7 +204,11 @@ Real captures and hard-won experience — several are decisive:
   dedicated Voltronic firmware.
 - Resolution: run `rsh identify` against **each socket** (it scans 9600 &
   19200 and both protocols) — the wire settles what the labels won't.
-- **SAKO/Voltronic BMS RJ45**: RS485-B pin 3, RS485-A pin 5, GND 7/8.
+- **SAKO/Voltronic BMS RJ45** — now confirmed from the SUNON IV manual
+  (docs/refs/sunon-IV-manual.txt, Appendix I; same Voltronic-standard
+  family as the SUNON V): it is a **combo port** — PIN1 RS232TX, PIN2
+  RS232RX, **PIN3 RS485B, PIN4 NC, PIN5 RS485A**, PIN6 CANH, PIN7 CANL,
+  **PIN8 GND**. So for PYLON-RS485 use **pin 3 = B, pin 5 = A, pin 8 = GND**.
 - → A straight patch cable connects nothing useful. Crossover for the
   Mason 280L 3.0 RS485 socket → SAKO: **Seplos 2/7 (A) → SAKO 5 (A),
   Seplos 1/8 (B) → SAKO 3 (B), Seplos 3/6 (GND) → SAKO 7/8 (GND)**.
@@ -212,8 +216,17 @@ Real captures and hard-won experience — several are decisive:
   not a straight cable because the pin numbers differ, 2/7↔5 and 1/8↔3.)
 - A/B polarity swap is harmless to try; 120 Ω termination only at the two
   physical bus ends; RS485 without bias floats when idle → garbage bytes.
-- Inverter menu: try program 05 = `Li` → program 36 = `L01`, and `LIB`
-  as alternative to `PYL`. Success indicator: battery icon/SOC follows BMS.
+- **Inverter menu (confirmed from SUNON IV manual — the V is the same
+  Voltronic-standard family)**: **program 05 = Battery type** is the only
+  setting; its lithium options are **`PYL` (Pylontech)**, **`LIB`**
+  (Lib-protocol battery), **`LIC`** (3rd-party lithium), plus WECO/Soltaro
+  (48V, CAN). Selecting `PYL`/`LIB`/`LIC` auto-configures programs
+  02/26/27/29 — no further setting. There is **no separate protocol-index
+  program** on this family (drop the earlier "program 36 = L01" idea — that
+  was a different clone). So on the SAKO: try **`PYL` first**; if the battery
+  serves the LIB register protocol instead, try **`LIB`**, then **`LIC`**.
+  Success indicator: the battery icon on the LCD **flashes** and SOC tracks
+  the BMS (can take >1 min to establish).
 
 ## SAKO ecosystem findings (from SAKO's own pairing video + Seplos compat list, 2026-09-22)
 
