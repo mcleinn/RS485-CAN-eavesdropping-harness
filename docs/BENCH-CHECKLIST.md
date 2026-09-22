@@ -40,7 +40,7 @@ link, run `identify` on each.
 - Expected good: "RESPONDER: Pylontech-ASCII battery-like device" +
       decoded state. Modbus verdict → PYLON not active / wrong socket.
       Silence → wrong socket/pinout/DIP; try the other socket, swap A/B.
-- [ ] Battery DIP: pack 1 (DIP1 ON per Pylontech convention) + power-cycle.
+- [ ] Battery DIP: try **DIP1 = ON (address 1)** + power-cycle (well-supported bet; pack 0 is often unreachable), then verify with `identify` — flip off and re-test if address 0 answers instead. Keep any CAN-select DIP OFF. Protocol itself is set in the Seplos app (Pylontech), not by DIP.
 
 ## Step 4 — Inverter alone
 - [ ] Set inverter **program 05 = PYL**.
