@@ -23,6 +23,10 @@ Linux/Raspberry Pi.
   payloads decoded into a state snapshot, dialect quirks flagged; Modbus
   register blocks read and decoded for LIB-mode batteries. Reports persist
   as JSON for diffing across settings/firmware changes.
+- **Scripting** (`send` / `script`): send arbitrary single frames, or run
+  JSON scenarios — a proactive master send/branch sequence, or reactive
+  "if it writes X, answer Y" responder rules. The LLM-drivable "hand me the
+  wire" surface.
 - **Simulators**: ideal Pylontech battery (both command families,
   configurable dialect quirks and state: `--set soc=20 ...`) and a
   Voltronic-style inverter poller — each bindable to any COM port.

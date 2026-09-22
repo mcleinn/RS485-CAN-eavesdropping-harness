@@ -1,0 +1,24 @@
+{
+  "name": "minimal-pylontech-responder",
+  "mode": "responder",
+  "baud": 9600,
+  "unmatched": "rtn04",
+  "_comment": "Reactive 'if it writes X, answer Y'. Answers the inverter's system polls with fixed canned payloads, echoing the request address. 0x60 name reply says 'Pylon'. Anything else -> RTN 04.",
+  "rules": [
+    {"when": {"cid2": "61"},
+     "respond": {"adr": "$req.adr", "cid2": "00",
+       "info": "CFCDFF8E510001000164640CFA000F0CF900100BB50BB900020BB200040BC30BC300010BC300010BC20BC200010BC20001"},
+     "note": "analog data (53.2V, -1.14A, 81%)"},
+    {"when": {"cid2": "62"},
+     "respond": {"adr": "$req.adr", "cid2": "00", "info": "00000000"},
+     "note": "no alarms"},
+    {"when": {"cid2": "63"},
+     "respond": {"adr": "$req.adr", "cid2": "00",
+       "info": "E100AF0003B603B6C0"},
+     "note": "limits 57.6V/95A, charge+discharge enabled"},
+    {"when": {"cid2": "60"},
+     "respond": {"adr": "$req.adr", "cid2": "00",
+       "info": "466F7263655F4C0000000000506C6F6E0000000000000000000000000000000000000009020123456789ABCDEF"},
+     "note": "basic info: name Force_L / Plon"}
+  ]
+}

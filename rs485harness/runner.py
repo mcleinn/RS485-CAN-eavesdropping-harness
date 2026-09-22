@@ -282,6 +282,83 @@ class Menu:
         self.jobs.append(job)
         print(f"started job #{job.id}: {job.name}  (session {sess.path})")
 
+    def op_send(self) -> None:
+        from .scripting import build_frame
+        from .core.transport import FrameAccumulator
+        import time as _t
+        port = self.pick_port("send")
+        if not port:
+            return
+        baud = int(self.ask("baud", "9600"))
+        raw = self.ask("raw hex/~ASCII frame (empty = build from fields)", "")
+        if raw:
+            spec = {"hex": raw}
+            expect = self.ask("decode reply as CID2 (hex, empty=skip)", "")
+        else:
+            cid2 = self.ask("CID2 (hex)", "61")
+            spec = {"ver": self.ask("VER", "20"), "adr": self.ask("ADR", "02"),
+                    "cid2": cid2, "info": self.ask("INFO hex", "")}
+            expect = cid2
+        sess = S.SessionWriter(S.new_session_path("send"))
+        link = SerialLink(port, baud, name="send")
+        try:
+            frame = build_frame(spec)
+        except Exception as e:
+            print(f"  build error: {e}"); sess.close(); link.close(); return
+        from .protocols.pylontech import frames as F, payloads as P
+        link.flush_input(); t0 = _t.perf_counter(); link.write(frame)
+        sess.log("send", "tx", frame, "frame", decoded=F.parse_frame(frame).to_dict())
+        acc = FrameAccumulator(); reply = None; deadline = t0 + 1.5
+        while _t.perf_counter() < deadline and reply is None:
+            c = link.read(timeout=0.1)
+            if c:
+                for ev in acc.feed(c):
+                    if ev.kind == "frame":
+                        reply = F.parse_frame(ev.data)
+                        sess.log("send", "rx", ev.data, "frame", decoded=reply.to_dict())
+        print(f"  TX {frame.hex().upper()}")
+        if reply:
+            print(f"  RX {reply.describe('response')}")
+            if expect:
+                print("  payload:", P.decode_response_info(int(expect, 16), reply.info))
+        else:
+            print("  RX (timeout)")
+        print(f"  session: {sess.path}")
+        sess.close(); link.close()
+
+    def op_script(self) -> None:
+        from .scripting import load_scenario, run_scenario, ScenarioError
+        import glob
+        found = sorted(glob.glob("docs/examples/*.json"))
+        if found:
+            print("example scenarios: " + ", ".join(found))
+        path = self.ask("scenario .json path")
+        if not path:
+            return
+        port = self.pick_port("script")
+        if not port:
+            return
+        try:
+            sc = load_scenario(path)
+        except ScenarioError as e:
+            print(f"  {e}"); return
+        baud = sc.get("baud", 9600)
+        sess = S.SessionWriter(S.new_session_path("script"))
+        link = SerialLink(port, baud, name="script")
+        dur = None
+        if sc.get("mode") == "responder":
+            d = self.ask("responder duration seconds (empty=until stop)", "")
+            dur = float(d) if d else None
+        print(f"running '{sc.get('name','?')}' mode={sc.get('mode')} ...")
+        try:
+            stats = run_scenario(link, sc, sess, duration=dur,
+                                 on_event=lambda l: print("  " + l, flush=True))
+        except (ScenarioError, ValueError) as e:
+            print(f"  error: {e}"); sess.close(); link.close(); return
+        report_path = S.save_report(sess.path, stats, "script")
+        print(f"stats: {stats}\nsession: {sess.path}\nreport: {report_path}")
+        sess.close(); link.close()
+
     def op_decode(self) -> None:
         from .protocols.pylontech import frames as F
         from .protocols.pylontech import payloads as P
@@ -359,6 +436,8 @@ class Menu:
         ("sniff", "passive capture on 1-2 channels", op_sniff),
         ("bridge", "forward ch1<->ch2 (+ optional translation)", op_bridge),
         ("demo", "loopback demo: sim vs sim, no hardware", op_demo),
+        ("send", "send one frame, decode the reply", op_send),
+        ("script", "run a JSON scenario (master seq / responder rules)", op_script),
         ("decode", "decode a pasted frame", op_decode),
         ("diagnose", "run hypothesis checks on a capture", op_diagnose),
         ("jobs", "list / stop running jobs", op_jobs),

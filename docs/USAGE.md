@@ -19,6 +19,8 @@ machine-readable output. Humans can drive everything from `rsh menu`.
 | `rsh sniff --ch1 COMa [--ch2 COMb]` | Passive capture, live decode, garbage classification (Modbus? wrong baud?) |
 | `rsh bridge --ch1 COMa --ch2 COMb` | Man-in-the-middle forwarding + logging. Translation: `--fix-cid2-echo`, `--force-ver b2a=20`, `--force-adr b2a=02` |
 | `rsh diagnose [session.jsonl]` | Hypothesis checks over a capture (default: newest). Findings tagged INFO/WARN/FAIL |
+| `rsh send --port COMx` | Send **one** frame and decode the reply. Fields (`--ver 20 --adr 02 --cid2 61 --info ...`) or raw `--hex 7E..0D` (verbatim, can be malformed); `--expect-cid2 61` decodes the reply payload. The quickest way to hand-talk to a device |
+| `rsh script --port COMx scenario.json` | Run a **scenario**: either a proactive **master** send/branch sequence, or a reactive **responder** ("if it writes X, answer Y"). See below |
 | `rsh decode "~2001...FD35"` | Decode one pasted frame (hex or ASCII), incl. payload fields |
 | `rsh demo [--identify] [--set soc=20]` | No-hardware loopback: battery-sim vs inverter-sim (or identify) in-process |
 | `rsh menu` | Interactive runner: pick WHAT (op) / WHICH (profile) / WHERE (channel); ops run concurrently as jobs (e.g. battery-sim on ch2 while identify runs on ch1); `jobs` lists/stops; `w` toggles live frame output |
@@ -105,6 +107,40 @@ Everything needed for later analysis is in these files:
 `rsh diagnose --json` gives the structured findings (and re-classifies
 raw records on the fly, so even minimal captures get full analysis); the
 hypothesis matrix lives in `rs485harness/analyzer/diagnose.py`.
+
+## Scripting your own exchanges (`send` / `script`)
+
+For probes the built-in tools don't cover, drive the wire directly.
+
+**One frame:** `rsh send --port COM7 --cid2 61 --adr 02 --expect-cid2 61`
+(or `--hex 7E32...0D` for a verbatim/malformed frame). Prints the decoded
+reply + payload; `--json` for automation.
+
+**Scenarios** (`rsh script --port COM7 file.json`) come in two modes; mode
+is inferred (`steps` → master, `rules` → responder) or set explicitly:
+
+- **responder** — reactive rules, the "if it writes X, answer Y" case. Each
+  incoming frame is matched against `rules` in order; the first match's
+  action fires: `respond` a frame, `respond: null` (silence), `stop`, with
+  optional `delay_ms`/`note`. Unmatched → `unmatched: "silence"|"rtn04"`.
+  This is a fully user-defined battery/BMS emulator. Example:
+  `docs/examples/responder-echo-adr.json`.
+- **master** — proactive `steps`: each sends a frame, waits `wait_ms`, then
+  branches via `expect` cases (`goto: next|stop|<label>`) matched against
+  the reply; `default` handles no-match/timeout. Good for custom scans,
+  conditional probes, replay-and-branch. Example:
+  `docs/examples/master-address-scan.json`.
+
+**Match conditions** (both modes): `cid2` (hex or list), `adr`, `ver`,
+`cid1`, `family` (`4x`/`6x`), `info_prefix`, `info_regex`, `hex_regex`,
+`is_request`, `is_response`, `has_errors`, `no_reply`. **Frame specs**:
+fields `ver/adr/cid1/cid2/info` (values may echo the trigger via
+`"$req.adr"`), `rtn` shortcut, or `hex`/`raw_hex` verbatim. 0x64 shutdown
+is refused unless the scenario sets `allow_shutdown: true`. Everything is
+logged to the session JSONL like every other tool.
+
+Because scenarios are plain JSON, an LLM can generate and run them on the
+fly — this is the "hand the model the wire" surface.
 
 ## Extending
 

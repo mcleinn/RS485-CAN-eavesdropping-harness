@@ -158,6 +158,87 @@ def cmd_identify(args) -> int:
     return 0
 
 
+def cmd_send(args) -> int:
+    """Send one frame (fields or raw hex), wait for and decode the reply."""
+    from .scripting import build_frame
+    from .core.transport import FrameAccumulator
+    import time as _t
+    sess = S.SessionWriter(args.session or S.new_session_path("send"))
+    link = _open_serial(args.port, args.baud, "send")
+    if args.hex:
+        spec = {"hex": args.hex}
+    else:
+        spec = {"ver": args.ver or "20", "adr": args.adr or "02",
+                "cid1": args.cid1 or "46", "cid2": args.cid2 or "00",
+                "info": args.info or ""}
+    frame = build_frame(spec, allow_shutdown=args.allow_shutdown)
+    link.flush_input()
+    t0 = _t.perf_counter()
+    link.write(frame)
+    sess.log("send", "tx", frame, "frame", decoded=F.parse_frame(frame).to_dict())
+    acc = FrameAccumulator()
+    reply = None
+    deadline = t0 + args.timeout
+    while _t.perf_counter() < deadline and reply is None:
+        chunk = link.read(timeout=min(0.1, max(0.01, deadline - _t.perf_counter())))
+        if not chunk:
+            continue
+        for ev in acc.feed(chunk):
+            kind = ev.kind
+            if kind == "frame":
+                reply = F.parse_frame(ev.data)
+                lat = round((ev.ts - t0) * 1000, 1)
+                sess.log("send", "rx", ev.data, "frame", decoded=reply.to_dict(),
+                         errors=reply.errors, note=f"latency_ms={lat}")
+            else:
+                sess.log("send", "rx", ev.data, "raw")
+    payload = None
+    if reply and reply.info:
+        cid2 = int(args.expect_cid2, 16) if args.expect_cid2 else \
+            (int(args.cid2, 16) if args.cid2 else None)
+        if cid2 is not None:
+            payload = P.decode_response_info(cid2, reply.info)
+    out = {"sent": frame.hex().upper(),
+           "reply": reply.to_dict() if reply else None,
+           "payload": payload, "session": str(sess.path)}
+    human = (f"TX {frame.hex().upper()}\n"
+             + (f"RX {reply.describe('response')}" if reply else "RX (timeout)")
+             + (f"\npayload: {payload}" if payload else ""))
+    _print(args, human, out)
+    sess.close()
+    link.close()
+    return 0 if reply else 2
+
+
+def cmd_script(args) -> int:
+    from .scripting import load_scenario, run_scenario, ScenarioError
+    try:
+        scenario = load_scenario(args.scenario)
+    except ScenarioError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+    sess = S.SessionWriter(args.session or S.new_session_path("script"))
+    link = _open_serial(args.port, args.baud or scenario.get("baud", 9600),
+                        "script")
+    mode = scenario.get("mode")
+    print(f"scenario '{scenario.get('name','?')}' mode={mode} on {args.port} "
+          f"@ {link.baud} baud; session: {sess.path}", flush=True)
+    try:
+        stats = run_scenario(link, scenario, sess, duration=args.duration,
+                             on_event=_quiet if args.json else _echo)
+    except (ScenarioError, ValueError) as e:
+        print(f"error: {e}", file=sys.stderr)
+        sess.close(); link.close()
+        return 1
+    stats["session"] = str(sess.path)
+    report_path = S.save_report(sess.path, stats, "script")
+    _print(args, f"stats: {stats}\nsession: {sess.path}\nreport: {report_path}",
+           stats)
+    sess.close()
+    link.close()
+    return 0
+
+
 def cmd_discover(args) -> int:
     from .analyzer.discover import discover, format_discovery
     sess = S.SessionWriter(args.session or S.new_session_path("discover"))
@@ -359,6 +440,34 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--adrs", default="0,1,2")
     common(p)
     p.set_defaults(fn=cmd_identify)
+
+    p = sub.add_parser("send", help="send one frame (fields or --hex), decode reply")
+    p.add_argument("--port", required=True)
+    p.add_argument("--baud", type=int, default=9600)
+    p.add_argument("--hex", help="raw frame bytes hex or ~ASCII (verbatim, "
+                                 "may be malformed)")
+    p.add_argument("--ver", help="hex, default 20")
+    p.add_argument("--adr", help="hex, default 02")
+    p.add_argument("--cid1", help="hex, default 46")
+    p.add_argument("--cid2", help="hex, default 00")
+    p.add_argument("--info", help="INFO ascii-hex payload, default empty")
+    p.add_argument("--expect-cid2", help="decode reply payload as answer to "
+                                         "this request CID2 (hex)")
+    p.add_argument("--timeout", type=float, default=1.0)
+    p.add_argument("--allow-shutdown", action="store_true",
+                   help="permit building a 0x64 shutdown frame")
+    common(p)
+    p.set_defaults(fn=cmd_send)
+
+    p = sub.add_parser("script", help="run a JSON scenario: master send/branch "
+                                      "sequence OR reactive responder rules")
+    p.add_argument("--port", required=True)
+    p.add_argument("--baud", type=int, help="override scenario baud")
+    p.add_argument("scenario", help="scenario .json file (or inline JSON)")
+    p.add_argument("--duration", type=float,
+                   help="responder mode: run seconds then stop")
+    common(p)
+    p.set_defaults(fn=cmd_script)
 
     p = sub.add_parser("discover", help="full capability + state inventory "
                                         "of a responder (run identify first)")

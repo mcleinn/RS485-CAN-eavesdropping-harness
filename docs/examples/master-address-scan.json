@@ -1,0 +1,28 @@
+{
+  "name": "walk-addresses-for-61",
+  "mode": "master",
+  "baud": 9600,
+  "_comment": "Proactive send/branch: poll GetSystemAnalogData (0x61) at ADR 00, 01, 02, 12; stop at the first that answers, reporting which address the device lives on. An LLM can generate longer/again variants of this trivially.",
+  "steps": [
+    {"label": "a00", "send": {"ver": "20", "adr": "00", "cid2": "61"},
+     "wait_ms": 700,
+     "expect": [{"when": {"is_response": true}, "goto": "stop",
+                 "note": "answered at ADR 00"}],
+     "default": {"goto": "next", "note": "no reply at 00"}},
+    {"label": "a01", "send": {"ver": "20", "adr": "01", "cid2": "61"},
+     "wait_ms": 700,
+     "expect": [{"when": {"is_response": true}, "goto": "stop",
+                 "note": "answered at ADR 01"}],
+     "default": {"goto": "next", "note": "no reply at 01"}},
+    {"label": "a02", "send": {"ver": "20", "adr": "02", "cid2": "61"},
+     "wait_ms": 700,
+     "expect": [{"when": {"is_response": true}, "goto": "stop",
+                 "note": "answered at ADR 02"}],
+     "default": {"goto": "next", "note": "no reply at 02"}},
+    {"label": "a12", "send": {"ver": "20", "adr": "12", "cid2": "61"},
+     "wait_ms": 700,
+     "expect": [{"when": {"is_response": true}, "goto": "stop",
+                 "note": "answered at ADR 12 (V3.5 master convention)"}],
+     "default": {"goto": "stop", "note": "silent at all probed addresses"}}
+  ]
+}
