@@ -25,6 +25,10 @@ machine-readable output. Humans can drive everything from `rsh menu`.
 
 ## Strategy for the SAKO ↔ Seplos problem
 
+> For the terse at-the-bench version (wiring table, exact commands, tick
+> boxes), use **`BENCH-CHECKLIST.md`**. This section explains the reasoning
+> behind those steps.
+
 Wiring context (per the Mason 280L 3.0 spec sheet; details in
 `PROTOCOL-NOTES.md`): on this pack the CAN socket is CAN-only (pins 4/5 =
 CAN-H/CAN-L), and RS485 is on the **RS485 sockets: A=2/7, B=1/8, GND=3/6**.

@@ -45,6 +45,8 @@ rsh identify --port COM5  # first thing to run against a real device
 
 ## Documentation
 
+- `docs/BENCH-CHECKLIST.md` — terse at-the-bench step card (wiring +
+  exact commands + pass/fail gates)
 - `docs/USAGE.md` — tool reference + diagnosis strategy/playbook
 - `docs/PROTOCOL-NOTES.md` — condensed protocol ground truth (frame format,
   checksums, both command families, payload layouts, addressing quirks,
