@@ -87,6 +87,31 @@ def test_v35_doc_golden_vectors():
     assert pf.ok and pf.adr == 0x12 and pf.cid2 == 0x00 and pf.info == "00000000"
 
 
+def test_real_captured_voltronic_frames():
+    """Real MPI/Infinisolar <-> Pylontech-emulator capture (powerforum
+    riogrande75) - our codec must parse and decode these unchanged."""
+    from rs485harness.protocols.pylontech import payloads as P
+    # protocol query/reply at ADR 02
+    assert F.parse_frame(b"~0002464F0000FD9A\r").cid2 == 0x4F
+    assert F.parse_frame(b"~200246000000FDB2\r").ok
+    # 0x61 analog reply (49-byte payload)
+    r61 = F.parse_frame(b"~200246008062CFCDFF8E510001000164640CFA000F0CF9"
+                        b"00100BB50BB900020BB200040BC30BC300010BC300010BC2"
+                        b"0BC200010BC20001E897\r")
+    assert r61.ok and r61.cid2 == 0x00
+    d = P.decode_61(r61.info)
+    assert d["voltage_v"] == 53.197 and d["current_a"] == -1.14
+    assert d["soc_percent"] == 81
+    # 0x63 charge/discharge reply
+    r63 = F.parse_frame(b"~20024600D012E100AF0003B603B6C0F9B5\r")
+    d = P.decode_63(r63.info)
+    assert d["charge_voltage_limit_v"] == 57.6
+    assert d["charge_current_limit_a"] == 95.0
+    assert d["status"]["charge_enable"] and d["status"]["discharge_enable"]
+    # JK inverter-BMS 0x63 query is at master ADR 0x12 (V3.5 convention)
+    assert F.parse_frame(b"~201246630000FDA8\r").adr == 0x12
+
+
 def test_family_classification():
     assert F.cid2_family(0x42) == "4x"
     assert F.cid2_family(0x61) == "6x"

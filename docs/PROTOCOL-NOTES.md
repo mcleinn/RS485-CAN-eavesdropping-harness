@@ -136,6 +136,47 @@ coils), SPA 0x1300 (settings), SFA 0x1400, SCA 0x150D. Full map:
 Use the RS485-1/RS485-2 socket for this — those ports never talk to
 inverters.
 
+## Field findings from forum threads (docs/refs/threads/, mined 2026-09-22)
+
+Real captures and hard-won experience — several are decisive:
+
+- **Real Voltronic↔Pylontech capture** (powerforum riogrande75, verified
+  against our codec, now a regression test): MPI/Infinisolar polls at
+  **ADR 02, VER 20**, sequence `4F`(protocol) → `61` → `63`, INFO carries
+  the pack byte "02". Example replies decode cleanly:
+  `~200246008062CFCDFF8E51...E897` = 53.197 V, −1.14 A, SoC 81%;
+  `~20024600D012E100AF0003B603B6C0F9B5` = charge 57.6 V/95 A, discharge
+  44.8 V/95 A, status C0 (charge+discharge enabled). JK inverter-BMS polls
+  0x63 at **ADR 0x12** — confirming the V3.5 master-address rule in the
+  wild.
+- **The missing 0x61/0x63 payload spec** lives in the **Sunsynk/Deye
+  "Battery Compatibility" document** (Sunsynk_BatteryCompatibility_v16) and
+  the sunsky/deye comms protocol — that's where riogrande75 and others
+  finally found it. (We already have the equivalent in the V3.5 design doc.)
+- **Inverter firmware is a recurring fix**: multiple Voltronic/Axpert
+  owners only got the BMS recognized after updating the display MCU to
+  **U2 = 12.21** ("inverter didn't accept my commands until I updated U2 to
+  12.21 - it was a firmware problem on the inverter"). Check the SAKO's U2
+  version and look for an update if frames are correct but ignored.
+- **Seplos BMS 3.0 (V3) implements the Voltronic 0x61/0x62/0x63 queries by
+  default**; setting the BMS RS485 protocol to "Pylontech" made an FSP/
+  Voltronic 15 kW inverter communicate immediately, no BMS firmware update
+  (older V10E did need special FW). So on our V3 pack, PYLON mode *should*
+  be enough on the correct port — shifting suspicion to cabling/port/
+  firmware, matching our plan.
+- **LIB mode is flaky**: several report CAN+Pylon works but RS485 "LIB"
+  loses the link / Error 61 after minutes (Voltronic Axpert Max + Seplos
+  3.0 / Basen). Prefer PYLON-on-RS485 over LIB where possible.
+- **Scaling gotchas from the wild**: one JK BMS reports current 5% low by
+  design, and its values overflow/garble above ~68 A — sanity-check
+  decoded currents against a clamp. Reinforces: compare raw hex before
+  trusting a scaling.
+- **US2000B DIP**: single battery needs **DIP1 ON for 9600 baud**
+  (DIP1-4 = 1000); all-off = 115200. Matches our "DIP1 selects baud" note.
+- **SAKO-specific** (DIY 93892): a SAKO Sunpolo 6 kW owner got a TDT 6022
+  BMS working **over RS485 only, never CAN**; suggests JK inverter-BMS also
+  works. Consistent with SAKO = Voltronic-family, RS485 path.
+
 ## Physical layer / cabling (top suspects for "battery not recognized")
 
 ⚠️ **Two conflicting sources for the Seplos-side port — test both.**
@@ -148,6 +189,13 @@ inverters.
   pins 1/8, GND 3/6, pins 4/5 dangling**, 19200 baud (native Modbus).
   If the PYLON-RS485 inverter mode is served on these sockets, the cable
   is Seplos 2/7→SAKO 5 (A), Seplos 1/8→SAKO 3 (B).
+- **Forum resolution** (DIY 47948, user sergea, RS485-version BMS): the
+  **left port is the inverter port** and is CAN *or* RS485 depending on the
+  BMS hardware variant — **check the sticker for "C" (CAN) or "D" (RS485)**;
+  the two right-hand ports are dedicated battery-to-battery RS485. Confirmed
+  working pinout: **BMS 4=A(white), 5=B(brown), 3/6=GND → INV 3=B(brown),
+  5=A(white), 8=GND**; GND optional but helps in noisy conditions. Some
+  RS485 packs have dedicated Voltronic firmware and work **only on RS485A**.
 - Resolution: run `rsh identify` against **each socket** (it scans 9600 &
   19200 and both protocols) — the wire settles what the labels won't.
 - **SAKO/Voltronic BMS RJ45**: RS485-B pin 3, RS485-A pin 5, GND 7/8.
