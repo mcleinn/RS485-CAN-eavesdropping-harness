@@ -8,3 +8,8 @@ dist/
 captures/
 .rsh-config.json
 .pytest_cache/
+
+# Third-party reference documents / forum posts / vendor source files:
+# copyrighted, kept local only. Rebuild the folder from docs/refs/MANUAL-DOWNLOADS.md.
+docs/refs/*
+!docs/refs/MANUAL-DOWNLOADS.md
