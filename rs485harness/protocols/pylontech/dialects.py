@@ -54,6 +54,14 @@ BATTERY_PROFILES: dict[str, DialectProfile] = {
         description="Same but echoes the request address in responses.",
         response_adr="echo",
     ),
+    "pylontech-v35": DialectProfile(
+        name="pylontech-v35",
+        description="Per the V3.5/Deye design doc: system 6x commands are "
+                    "polled at master addresses 0x12/0x22/... and the "
+                    "response echoes that address (doc examples: "
+                    "~2012 46 00 ...).",
+        response_adr="echo",
+    ),
     "pylontech-6x-only": DialectProfile(
         name="pylontech-6x-only",
         description="Answers only the system-level 0x60-0x63 family "
@@ -117,6 +125,13 @@ INVERTER_PROFILES: dict[str, InverterPollProfile] = {
         name="voltronic-6x-adr2",
         description="Same poll cycle but on ADR 02 (master-pack convention).",
         adr=0x02,
+    ),
+    "pylon-v35-adr12": InverterPollProfile(
+        name="pylon-v35-adr12",
+        description="V3.5-doc style (Deye et al.): polls 0x60/61/62/63 at "
+                    "master address 0x12 (first DIP group) @ 9600.",
+        adr=0x12,
+        commands=(0x60, 0x61, 0x62, 0x63),
     ),
     "monitoring-4x": InverterPollProfile(
         name="monitoring-4x",

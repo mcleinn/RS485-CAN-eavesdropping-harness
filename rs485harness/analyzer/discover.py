@@ -226,7 +226,7 @@ def _modbus_discovery(link: Link, session: SessionWriter, chan: str,
 def _find_responder(link: Link, session: SessionWriter, chan: str,
                     on_event) -> dict | None:
     """Quick scan (current baud only) for something to discover."""
-    for adr in (2, 1, 0):
+    for adr in (2, 0x12, 1, 0):
         for ver in (0x20, 0x25):
             pf, _lat = _probe_pylontech(link, ver, adr, 0x61, "",
                                         session=session, chan=chan)

@@ -1,5 +1,18 @@
 # Reference documents — already downloaded & still to fetch manually
 
+## Status update 2026-09-22 (late): user fetched most manual items
+
+Obtained and processed (findings folded into ../PROTOCOL-NOTES.md):
+- ✅ SAKO pairing video (`300A lithium battery communication setting.mp4`) — battery-side "RS485-SAKO" selection, port labels; frames analyzed
+- ✅ SUNON IV manual PDF (scanned; not yet mined — SUNON V manual on manuals.plus turned out to be an abridged summary without the program table)
+- ✅ Seplos compatibility list (`BMS_SEPLOS_Inverter_Compatibility_Types_and_Models_V3.pdf` → `seplos-compat.txt`) — no SAKO row; Voltronic needs dedicated firmware
+- ✅ Seplos BMS 3.0 firmware V1.5D [20251118] RAR — "Added inverter communication protocols"; V10/V11 hardware warning
+- ✅ Mason 280L (3.0) pack spec (→ `mason280l-spec.txt`) — official port pinout (conflicts with forum lore; see PROTOCOL-NOTES)
+- ✅ tt-sun "新增协议设计" PDF — byte-identical to the Akkudoktor mirror we had; extracted to `pylontech-v35-design.txt` = full 6x-family spec incl. ADR 0x12 rule and 0x60 layout
+- ➖ openenergymonitor emulator PDF (`starting-new-work.pdf`) — dud: CAN/Victron emulator notes, no RS485 protocol content
+
+Still open: the DIY Solar Forum / Photovoltaikforum threads below (browser only), and the SUNON V's real program table (best source now: the SUNON IV scanned manual, or the inverter's own menu once on the bench).
+
 ## Already in this folder (scripted download, 2026-09-22)
 
 | File | What it is |

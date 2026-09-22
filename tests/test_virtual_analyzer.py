@@ -235,9 +235,9 @@ def test_discover_full_inventory_of_battery_sim(tmp_path):
     sess.close()
 
     assert report["responder"]["protocol"] == "pylontech"
-    for cid2 in ("42", "47", "51", "61", "62", "63", "92", "93"):
+    for cid2 in ("42", "47", "51", "60", "61", "62", "63", "92", "93"):
         assert cid2 in report["supported"], (cid2, report["commands"][cid2])
-    assert "60" in report["unsupported"]  # sim answers RTN=04 there
+    assert report["commands"]["60"]["decoded"]["battery_name"] == "MASON280L"
     st = report["state"]
     assert st["soc_percent"] == 55
     assert st["identity"]["device_name"] == "MASON280L"

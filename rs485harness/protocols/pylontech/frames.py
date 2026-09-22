@@ -49,6 +49,7 @@ CID2_NAMES = {
     0x61: "GetSystemAnalogData",
     0x62: "GetSystemAlarmInfo",
     0x63: "GetSystemChargeDischargeInfo",
+    0x64: "SystemShutdown",
     0x92: "GetChargeDischargeManagement",
     0x93: "GetModuleSerialNumber",
     0x94: "SetChargeDischargeManagement",
@@ -58,7 +59,7 @@ CID2_NAMES = {
 }
 
 FAMILY_4X = frozenset({0x42, 0x44, 0x47, 0x4F, 0x51, 0x92, 0x93, 0x94, 0x96, 0xC1, 0xC2})
-FAMILY_6X = frozenset({0x60, 0x61, 0x62, 0x63})
+FAMILY_6X = frozenset({0x60, 0x61, 0x62, 0x63, 0x64})
 
 _HEX = set(string.hexdigits.encode())
 

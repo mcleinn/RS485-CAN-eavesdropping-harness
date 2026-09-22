@@ -106,6 +106,26 @@ def test_identify_against_battery_sim(tmp_path):
     assert report.get("identity", {}).get("device_name") == "MASON280L"
 
 
+def test_v35_adr12_poll(tmp_path):
+    """V3.5-doc inverter (polls 0x60-0x63 at master ADR 0x12) against the
+    v35 battery profile (echoes that address)."""
+    sess = make_session(tmp_path, "v35")
+    end_inv, end_bat = loopback_pair("inv", "bat")
+    profile = DialectProfile(**{**BATTERY_PROFILES["pylontech-v35"].to_dict(),
+                                "response_delay_s": 0.0})
+    bat = BatterySimulator(end_bat, preset("ideal"), profile, sess, chan="bat")
+    bat.start()
+    inv = InverterSimulator(end_inv, INVERTER_PROFILES["pylon-v35-adr12"], sess)
+    res60 = inv.poll_once(0x60)
+    res61 = inv.poll_once(0x61)
+    bat.stop()
+    sess.close()
+    assert res60["status"] == "response"
+    assert res60["frame"]["adr"] == 0x12  # response echoes the master address
+    assert res60["payload"]["battery_name"] == "US5000"
+    assert res61["payload"]["max_cell_module"] == "0101"
+
+
 def test_state_reflected_in_responses(tmp_path):
     state = preset("ideal")
     state.soc_percent = 17

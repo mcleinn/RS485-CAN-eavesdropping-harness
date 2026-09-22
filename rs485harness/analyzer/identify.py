@@ -25,7 +25,9 @@ from ..protocols.pylontech import payloads as P
 from .classify import classify_raw, crc16_modbus, find_modbus_frames
 
 DEFAULT_BAUDS = (9600, 19200, 115200)
-DEFAULT_ADRS = (0, 1, 2)
+# 0x12 = master-group address for the system 6x commands per the V3.5/Deye
+# doc ("only addresses 12,22,32,... are valid" for 0x60-0x64)
+DEFAULT_ADRS = (0, 1, 2, 0x12)
 DEFAULT_VERS = (0x20, 0x25)
 
 

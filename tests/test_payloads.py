@@ -26,7 +26,16 @@ def test_61_roundtrip():
     assert d["current_a"] == -12.5
     assert d["soc_percent"] == 42
     assert abs(d["avg_cell_temp_c"] - s.temperature_c) <= 0.1
-    assert d["_tag1"] == "0101" and d["_tag2"] == "0108"
+    assert d["max_cell_module"] == "0101" and d["min_cell_module"] == "0108"
+
+
+def test_60_roundtrip():
+    s = state()
+    d = P.decode_60(P.build_60(s))
+    assert d["battery_name"] == "US5000"
+    assert d["manufacturer"] == "Pylon"
+    assert d["battery_count"] == 1
+    assert d["barcodes"] == [s.serial_number]
 
 
 def test_62_roundtrip():

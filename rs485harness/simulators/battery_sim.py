@@ -41,6 +41,8 @@ class BatterySimulator:
         fam = F.cid2_family(cid2)
         if fam not in self.profile.families:
             return None
+        if cid2 == 0x60:
+            return P.build_60(s)
         if cid2 == 0x61:
             return P.build_61(s)
         if cid2 == 0x62:

@@ -75,6 +75,30 @@ def c_to_k10(c: float) -> int:
 
 # ---------------------------------------------------------------- 6x family
 
+def build_60(s) -> str:
+    """System basic info (V3.5 doc 2.1): battery name (10B ASCII) +
+    manufacturer name (20B ASCII) + software version (2B) + battery count
+    (1B) + one 16B barcode per battery. This is the RS485 analogue of the
+    CAN 0x35E name check some inverters use to accept a battery."""
+    name = s.device_name.encode("ascii")[:10].ljust(10, b"\x00")
+    manu = s.manufacturer.encode("ascii")[:20].ljust(20, b"\x00")
+    barcode = s.serial_number.encode("ascii")[:16].ljust(16, b"\x00")
+    return (name.hex().upper() + manu.hex().upper()
+            + f"{s.software_version[0]:02X}{s.software_version[1]:02X}"
+            + "01" + barcode.hex().upper())
+
+
+def decode_60(info: str) -> dict:
+    r = HexReader(info)
+    d = {"battery_name": r.ascii(10), "manufacturer": r.ascii(20),
+         "software_version": [r.u8(), r.u8()], "battery_count": r.u8()}
+    barcodes = []
+    while r.remaining >= 16:
+        barcodes.append(r.ascii(16))
+    d["barcodes"] = barcodes
+    return d
+
+
 def build_61(s) -> str:
     """System analog data (49 bytes / 98 chars). `s` is a BatteryState."""
     t = c_to_dk(s.temperature_c)
@@ -97,17 +121,22 @@ def decode_61(info: str) -> dict:
         "voltage_v": r.u16() / 1000, "current_a": r.i16() / 100,
         "soc_percent": r.u8(), "cycles": r.u16(), "cycles2": r.u16(),
         "soh_percent": r.u8(), "soh2": r.u8(),
-        "max_cell_v": r.u16() / 1000, "_tag1": f"{r.u16():04X}",
-        "min_cell_v": r.u16() / 1000, "_tag2": f"{r.u16():04X}",
+        # the 0x0101-style words are module locators per the V3.5 doc:
+        # e.g. 0x0304 = module 4 in the battery group with DIP address 3
+        "max_cell_v": r.u16() / 1000, "max_cell_module": f"{r.u16():04X}",
+        "min_cell_v": r.u16() / 1000, "min_cell_module": f"{r.u16():04X}",
         "avg_cell_temp_c": dk_to_c(r.u16()), "max_cell_temp_c": dk_to_c(r.u16()),
-        "_tag3": f"{r.u16():04X}", "min_cell_temp_c": dk_to_c(r.u16()),
-        "_tag4": f"{r.u16():04X}",
+        "max_cell_temp_module": f"{r.u16():04X}",
+        "min_cell_temp_c": dk_to_c(r.u16()),
+        "min_cell_temp_module": f"{r.u16():04X}",
         "avg_mosfet_temp_c": dk_to_c(r.u16()), "max_mosfet_temp_c": dk_to_c(r.u16()),
-        "_tag5": f"{r.u16():04X}", "min_mosfet_temp_c": dk_to_c(r.u16()),
-        "_tag6": f"{r.u16():04X}",
+        "max_mosfet_temp_module": f"{r.u16():04X}",
+        "min_mosfet_temp_c": dk_to_c(r.u16()),
+        "min_mosfet_temp_module": f"{r.u16():04X}",
         "avg_bms_temp_c": dk_to_c(r.u16()), "max_bms_temp_c": dk_to_c(r.u16()),
-        "_tag7": f"{r.u16():04X}", "min_bms_temp_c": dk_to_c(r.u16()),
-        "_tag8": f"{r.u16():04X}",
+        "max_bms_temp_module": f"{r.u16():04X}",
+        "min_bms_temp_c": dk_to_c(r.u16()),
+        "min_bms_temp_module": f"{r.u16():04X}",
     }
     return d
 
@@ -346,7 +375,7 @@ def decode_93(info: str) -> dict:
 
 RESPONSE_DECODERS = {
     0x42: decode_42, 0x47: decode_47, 0x51: decode_51,
-    0x61: decode_61, 0x62: decode_62, 0x63: decode_63,
+    0x60: decode_60, 0x61: decode_61, 0x62: decode_62, 0x63: decode_63,
     0x92: decode_92, 0x93: decode_93,
 }
 

@@ -75,6 +75,18 @@ def test_response_rtn_semantics():
     assert "OK" in pf.describe("response")
 
 
+def test_v35_doc_golden_vectors():
+    """Worked examples from the V3.5/Deye design doc (docs/refs/
+    pylontech-v35-design.txt) - system commands at master ADR 0x12."""
+    for cid2, tail in ((0x60, "FDAB"), (0x61, "FDAA"), (0x62, "FDA9"),
+                       (0x63, "FDA8")):
+        want = f"~201246{cid2:02X}0000{tail}\r".encode()
+        assert F.encode_frame(0x20, 0x12, 0x46, cid2, "") == want
+    # 0x62 response example: RTN=00, 4 alarm bytes all zero
+    pf = F.parse_frame(b"~20124600800800000000FC21\r")
+    assert pf.ok and pf.adr == 0x12 and pf.cid2 == 0x00 and pf.info == "00000000"
+
+
 def test_family_classification():
     assert F.cid2_family(0x42) == "4x"
     assert F.cid2_family(0x61) == "6x"

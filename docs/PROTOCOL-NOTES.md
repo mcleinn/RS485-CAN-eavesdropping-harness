@@ -71,6 +71,36 @@ which family the real inverter asks for.
   remaining cap, user-defined count, total cap, cycles (24-bit capacity
   extension when user-defined > 2).
 
+### V3.5 / "new protocol design" doc findings (docs/refs/pylontech-v35-design.txt — full 6x spec, verified 2026-09-22)
+
+The Deye-variant design doc ("新增协议设计…9600", byte-identical to the
+Akkudoktor mirror) is the authoritative 6x-family spec. Key facts, all
+verified against our codec (frames pass checksum):
+
+- **System commands 0x60–0x64 are only valid at master-group addresses
+  0x12, 0x22, 0x32, 0x42, 0x52, 0x62, 0x72** (DIP-group dependent); the
+  response **echoes** that address (`~2012 46 00 …`). Request golden
+  vectors: `~201246600000FDAB\r`, `~201246610000FDAA\r`,
+  `~201246620000FDA9\r`, `~201246630000FDA8\r`. identify/discover probe
+  ADR 0x12; profiles `pylontech-v35` (battery) and `pylon-v35-adr12`
+  (inverter) model this dialect.
+- **0x60 = system basic info**: battery name (10B ASCII, e.g. "Force_L") +
+  manufacturer (20B, "Pylon") + software version (2B) + battery count (1B)
+  + 16B barcode per battery. This is the RS485 analogue of the CAN 0x35E
+  "PYLON" name check — a prime suspect when an inverter probes and then
+  rejects a battery.
+- The 0x0101-style words in 0x61 are **module locators** (0x0304 = module
+  4 in DIP-group-3), not constants; the duplicated fields are avg/max
+  cycles and avg/min SOH. Temps = °C×10 + 2731 (matches the emulators).
+- Scaling is dialect-dependent: doc's 0x61 example current 0x61A8 = 25.00 A
+  (÷1000) vs Fahmula's centi-amps; doc's 0x63 currents ÷100 vs Fahmula's
+  ÷10. When diagnosing content-level rejection, compare raw hex before
+  trusting any single scaling.
+- 0x64 = system shutdown — **never probe it against a real battery**
+  (discover deliberately excludes it).
+- Seplos's own compatibility list says its PYLON RS485 mode = this
+  "RS485-protocol-pylon-low-voltage" **V3.5, auto-adaptation, 9600**.
+
 ### Addressing (messy on purpose — never filter on ADR when sniffing)
 
 - Spec says ADR 1..254. But: master pack commonly answers on **ADR 02**
@@ -108,9 +138,18 @@ inverters.
 
 ## Physical layer / cabling (top suspects for "battery not recognized")
 
-- **Seplos inverter-comms socket is the RJ45 labelled "CAN"** — in RS485
-  mode it carries RS485-A on pin 4, RS485-B on pin 5, GND 3/6. The
-  RS485-1/RS485-2 sockets are pack-interlink/PC only.
+⚠️ **Two conflicting sources for the Seplos-side port — test both.**
+- Forum reports (RS485-variant BMS boards): the inverter-comms socket is
+  the RJ45 labelled "CAN", carrying RS485-A on pin 4, RS485-B on pin 5,
+  GND 3/6; RS485-1/RS485-2 are pack-interlink/PC only.
+- **Official Mason 280L (3.0) pack specification** (docs/refs/
+  mason280l-spec.txt): the CAN socket is CAN-only (4 = CAN-H, 5 = CAN-L,
+  3/6 GND, 1/2/7/8 NC) and the **RS485 sockets carry A on pins 2/7, B on
+  pins 1/8, GND 3/6, pins 4/5 dangling**, 19200 baud (native Modbus).
+  If the PYLON-RS485 inverter mode is served on these sockets, the cable
+  is Seplos 2/7→SAKO 5 (A), Seplos 1/8→SAKO 3 (B).
+- Resolution: run `rsh identify` against **each socket** (it scans 9600 &
+  19200 and both protocols) — the wire settles what the labels won't.
 - **SAKO/Voltronic BMS RJ45**: RS485-B pin 3, RS485-A pin 5, GND 7/8.
 - → A straight patch cable connects nothing useful. Build crossover:
   Seplos 4 → SAKO 5 (A), Seplos 5 → SAKO 3 (B), Seplos 3/6 → SAKO 7/8 (GND).
@@ -118,6 +157,29 @@ inverters.
   physical bus ends; RS485 without bias floats when idle → garbage bytes.
 - Inverter menu: try program 05 = `Li` → program 36 = `L01`, and `LIB`
   as alternative to `PYL`. Success indicator: battery icon/SOC follows BMS.
+
+## SAKO ecosystem findings (from SAKO's own pairing video + Seplos compat list, 2026-09-22)
+
+- SAKO's demo video (docs/refs/*.mp4) pairs the SUNON V with SAKO's
+  **Li-Sun battery** by setting the *battery* (PACE-style LCD: PackSet →
+  RS485 list) to **"RS485-SAKO"** — a house dialect. The battery firmware
+  also offers RS485-PYLON / GROWATT / **Voltronic** / LXP / SVC /
+  OLU VMII / Index12, so SUNON V's "PYL" plausibly maps to real
+  Pylontech-ASCII, with SAKO/Voltronic as distinct alternatives. The
+  inverter-side menu is never shown — pairing "just works" after the
+  battery-side selection.
+- Li-Sun battery ports (video): RJ45s labelled **BAT RS485B** (pack link),
+  **RS232**, and **CAN / RS485A INVERTER** — the demo plugs the inverter
+  cable into the INVERTER port; DIP block + status LEDs beside it.
+- Seplos V16-era compatibility list (docs/refs/seplos-compat.txt): for
+  genuine **Voltronic and MPP Solar** inverters, RS485 comm required
+  **"Upgrade Voltronic Program V1.0"** — a dedicated BMS firmware, not
+  auto-adaptation (only EA Sun's Voltronic-protocol inverters worked
+  auto). **No SAKO row exists** — SAKO is unverified by Seplos.
+- Seplos **BMS 3.0 firmware V1.5D [2025-11-18]** (docs/refs RAR):
+  release note = "Added inverter communication protocols". Check whether
+  the pack's BMS is hardware **V10 or V11** before flashing (wrong image
+  doubles the displayed current).
 
 ## USB adapter notes (Waveshare USB TO 2CH RS485)
 
