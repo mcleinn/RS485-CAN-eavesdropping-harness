@@ -48,15 +48,18 @@ def run_selftest(port1: str | None = None, port2: str | None = None,
         session.note(f"selftest start port1={port1} port2={port2} "
                      f"bauds={list(bauds)}")
 
-    def check(name: str, ok: bool, detail: str = "") -> None:
-        report["checks"].append({"name": name, "ok": ok, "detail": detail})
-        if not ok:
+    def check(name: str, ok: bool, detail: str = "", warn: bool = False) -> None:
+        # warn=True: advisory only (does not fail the run); e.g. latency timer.
+        tag = "PASS" if ok else ("WARN" if warn else "FAIL")
+        report["checks"].append({"name": name, "ok": ok, "detail": detail,
+                                 "severity": "warn" if (warn and not ok) else
+                                 ("pass" if ok else "fail")})
+        if not ok and not warn:
             report["passed"] = False
         if session:
-            session.note(f"selftest [{'PASS' if ok else 'FAIL'}] {name}"
+            session.note(f"selftest [{tag}] {name}"
                          + (f" - {detail}" if detail else ""))
-        on_event(f"  [{'PASS' if ok else 'FAIL'}] {name}"
-                 + (f" - {detail}" if detail else ""))
+        on_event(f"  [{tag}] {name}" + (f" - {detail}" if detail else ""))
 
     own_links = links is None
     if links is not None:
@@ -100,8 +103,8 @@ def run_selftest(port1: str | None = None, port2: str | None = None,
                   f"{len(got)}/{len(pattern)}B in {dt * 1000:.1f}ms")
             overhead_ms = (dt - wire_time) * 1000
             if ok and overhead_ms > 40:
-                check(f"{baud} ch1->ch2 latency", False,
-                      f"overhead {overhead_ms:.0f}ms - check USB latency "
+                check(f"{baud} ch1->ch2 latency", False, warn=True,
+                      detail=f"overhead {overhead_ms:.0f}ms - check USB latency "
                       f"timer (FTDI: Device Manager > COM port > Advanced > "
                       f"Latency Timer = 1 ms, then replug)")
             ok, got, dt = _transfer(l2, l1, pattern)
@@ -126,6 +129,20 @@ def run_selftest(port1: str | None = None, port2: str | None = None,
             ok, _, dt = _transfer(l1, l2, small)
             if ok:
                 bres["small_frame_ms"] = round(dt * 1000, 1)
+                # A small frame's delivery is dominated by the USB latency
+                # timer, not wire time. Overhead > ~6ms is the FTDI 16ms
+                # default -> flag it (matters for bridge/MITM turnaround).
+                small_wire_ms = len(small) * 10 / baud * 1000
+                overhead_ms = dt * 1000 - small_wire_ms
+                bres["small_frame_overhead_ms"] = round(overhead_ms, 1)
+                if overhead_ms > 6:
+                    check(f"{baud} small-frame latency", False, warn=True,
+                          detail=f"{overhead_ms:.0f}ms overhead on a "
+                          f"{len(small)}B frame - USB latency timer likely at "
+                          f"default 16ms. Set it to 1ms (Device Manager > COM "
+                          f"port > Port Settings > Advanced > Latency Timer = "
+                          f"1) and replug. Harmless for polling/sniffing; adds "
+                          f"per-turn delay in bridge/MITM mode.")
             report["bauds"][str(baud)] = bres
     finally:
         if own_links:
