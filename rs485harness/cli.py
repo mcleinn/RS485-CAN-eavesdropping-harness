@@ -40,7 +40,9 @@ def _arm_deadline(seconds, what: str) -> None:
               f"aborting. If this recurs the adapter may be wedged - "
               f"unplug/replug it.", flush=True)
         os._exit(3)
-    threading.Timer(seconds, _fire).start()
+    timer = threading.Timer(seconds, _fire)
+    timer.daemon = True   # never keep the process alive after the work is done
+    timer.start()
 
 
 def _print(args, human: str, data: dict) -> None:
