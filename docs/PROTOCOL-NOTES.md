@@ -251,6 +251,40 @@ Real captures and hard-won experience — several are decisive:
   the pack's BMS is hardware **V10 or V11** before flashing (wrong image
   doubles the displayed current).
 
+## Real-device validation — Pylontech US5000C stack (2026-09-24)
+
+Verified on a 4-pack US5000C rack (fw 2.3) via the master's **B/RS485**
+port (pins 7=A, 8=B, 6=GND), **115200 8N1**:
+- Packs answer individually at **ADR 02, 03, 04, 05** (master = 02); ADR
+  06+ silent. VER 20. Bus is quiet when idle (0 bytes in 5 s) — no
+  inter-pack traffic on this port, safe to poll.
+- **All of 0x42/44/47/4F/51/60/61/62/63/92/93 supported**; replies in
+  ~5–60 ms (0x42 with 144 B is the slowest, ~60 ms).
+- **0x42 with INFO=FF (all packs) is NOT supported on fw 2.3** — 0/5
+  replies. `rsh soc` falls back to per-pack 0x42 at 02..05.
+- 0x42 reply layout confirmed: INFO = `11` flag, pack#, `0F` (15 cells),
+  15 × cell mV, 6 temps (K×10), current (dA), voltage (mV), remaining,
+  user-items, total, cycles — our `decode_42` matches (15 cells ≈ 3.296 V,
+  60/100 Ah → SOC 60 %).
+- 0x63 = **stack** limits (52.8 V / 45.0 V, ±400 A = 4 × 100 A);
+  0x92 = **per-pack** (±100 A). 0x61 voltage/SOC/SOH decode confirmed.
+- Identity via 0x51: "US5000" / "Pylon" (dash-padded), sw [2, 3]; 0x93
+  serial per pack.
+- Adapter: the FT2232H's COM order did **not** match the "Port 1/2"
+  silkscreen (Port 1 = COM6 here) — always identify on both.
+
+### Windows/pyserial gotchas that bit us on real hardware
+- **Never set `ser.timeout` per read.** On Windows the setter runs a full
+  port reconfigure (`SetCommState`); bytes arriving in that window are
+  dropped → intermittent "silent" replies. Open once with a fixed short
+  timeout and loop for longer waits (transport.py does this now).
+- **Always set `write_timeout`** and avoid `flush()` (FlushFileBuffers):
+  an FTDI write can block forever in kernel mode, leaving an unkillable
+  zombie until the USB is unplugged. A stall watchdog cancels calls > 4 s.
+- Change baud by **reopening** the port, not by setting `.baudrate` live.
+- One-shot tools carry a hard `--max-seconds` budget; never pipe them
+  through `tail` (it hides progress until exit).
+
 ## USB adapter notes (Waveshare USB TO 2CH RS485)
 
 - FTDI FT2232HL → two independent COM ports. **Set latency timer to 1 ms**

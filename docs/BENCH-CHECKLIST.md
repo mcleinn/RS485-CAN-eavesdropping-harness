@@ -23,7 +23,8 @@ link, run `identify` on each.
 ## Step 1 — Drivers & ports
 - [ ] Plug in adapter; install FTDI VCP driver if needed.
 - [ ] `rsh ports` shows two COM ports for the one device. Note them as
-      COM_A, COM_B.
+      COM_A, COM_B. ⚠️ COM order may not match the "Port 1/2" silkscreen
+      (on ours Port 1 = COM6) — when a device is silent, try the other COM.
 - [ ] Device Manager → each COM → Advanced → **Latency Timer = 1 ms** →
       unplug/replug.
 

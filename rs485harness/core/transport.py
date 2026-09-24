@@ -78,17 +78,23 @@ class SerialLink(Link):
         if self._pushback:
             data, self._pushback = self._pushback, b""
             return Chunk(time.perf_counter(), data)
-        self.ser.timeout = timeout
+        # NEVER set ser.timeout per call: on Windows the setter runs a full
+        # port reconfigure (SetCommState) and bytes arriving in that window
+        # can be dropped (seen as intermittent 'silent' replies on a real
+        # US5000). The port keeps a fixed 50ms timeout; longer waits loop.
+        deadline = time.perf_counter() + timeout
         self._inflight = ("read", time.perf_counter())
         try:
-            first = self.ser.read(1)
-            if not first:
-                return None
-            n = self.ser.in_waiting
-            data = first + (self.ser.read(n) if n else b"")
+            while True:
+                first = self.ser.read(1)
+                if first:
+                    n = self.ser.in_waiting
+                    data = first + (self.ser.read(n) if n else b"")
+                    return Chunk(time.perf_counter(), data)
+                if time.perf_counter() >= deadline:
+                    return None
         finally:
             self._inflight = None
-        return Chunk(time.perf_counter(), data)
 
     def write(self, data: bytes) -> None:
         self._inflight = ("write", time.perf_counter())
@@ -113,10 +119,9 @@ class SerialLink(Link):
         deadline = time.perf_counter() + 0.05 + len(sent) * 10 / self.baud * 2
         got = b""
         while len(got) < len(sent) and time.perf_counter() < deadline:
-            self.ser.timeout = max(0.0, deadline - time.perf_counter())
-            b = self.ser.read(len(sent) - len(got))
+            b = self.ser.read(len(sent) - len(got))   # fixed 50ms port timeout
             if not b:
-                break
+                continue
             got += b
         if got != sent[:len(got)]:
             self._pushback += got  # not an echo after all - keep it
@@ -128,8 +133,10 @@ class SerialLink(Link):
         self.echo_suppress = False
         try:
             self.ser.write(probe)
-            self.ser.timeout = 0.2
-            got = self.ser.read(len(probe))
+            got = b""
+            deadline = time.perf_counter() + 0.2
+            while len(got) < len(probe) and time.perf_counter() < deadline:
+                got += self.ser.read(len(probe) - len(got))
             self.echo_suppress = got == probe
             return self.echo_suppress
         finally:

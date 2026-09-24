@@ -278,9 +278,31 @@ def cmd_soc(args) -> int:
             if d.get("modules"):
                 data, used = d, adr
                 break
+    mode = f"0x42 FF @ ADR {used:02X}" if data is not None else None
     if data is None:
-        _print(args, "no multi-pack response (try --baud 115200, or run "
-                     "`rsh identify` to find the address/baud)",
+        # Firmware without the FF all-packs query (e.g. US5000 fw 2.3):
+        # poll each pack address individually and assemble the stack.
+        mods = []
+        for adr in range(2, 10):
+            pf, lat = _probe_pylontech(link, ver, adr, 0x42, f"{adr:02X}",
+                                       session=sess, chan="soc",
+                                       timeout=args.timeout)
+            if pf is None or not pf.ok or not pf.info:
+                if mods:
+                    break        # contiguous range ended
+                continue
+            d = P.decode_42(pf.info)
+            if d.get("modules"):
+                m = d["modules"][0]; m["address"] = adr; mods.append(m)
+        if mods:
+            rem = sum(m["remaining_ah"] for m in mods)
+            tot = sum(m["total_ah"] for m in mods)
+            data = {"n_modules": len(mods), "modules": mods,
+                    "stack_soc_percent": round(rem / tot * 100, 1) if tot else None}
+            mode = f"per-pack 0x42 @ ADR {mods[0]['address']:02X}..{mods[-1]['address']:02X}"
+    if data is None:
+        _print(args, "no response (try --baud 115200, or run `rsh identify` "
+                     "to find the address/baud)",
                {"error": "no response", "session": str(sess.path)})
         sess.close(); link.close(); return 2
     rows = []
@@ -289,7 +311,7 @@ def cmd_soc(args) -> int:
                      "voltage_v": m.get("voltage_v"), "current_a": m.get("current_a"),
                      "remaining_ah": m.get("remaining_ah"),
                      "total_ah": m.get("total_ah"), "cycles": m.get("cycles")})
-    human = [f"SOC via ADR {used:02X}  ({data['n_modules']} packs, stack "
+    human = [f"SOC via {mode}  ({data['n_modules']} packs, stack "
              f"{data['stack_soc_percent']}%)",
              f"{'pack':>4} {'SOC%':>5} {'V':>7} {'A':>7} {'remAh':>7} {'totAh':>7} {'cyc':>5}"]
     for r in rows:
@@ -297,7 +319,7 @@ def cmd_soc(args) -> int:
                      f"{r['voltage_v']!s:>7} {r['current_a']!s:>7} "
                      f"{r['remaining_ah']!s:>7} {r['total_ah']!s:>7} "
                      f"{r['cycles']!s:>5}")
-    out = {"address": used, "n_packs": data["n_modules"],
+    out = {"mode": mode, "n_packs": data["n_modules"],
            "stack_soc_percent": data["stack_soc_percent"], "packs": rows,
            "session": str(sess.path)}
     _print(args, "\n".join(human), out)

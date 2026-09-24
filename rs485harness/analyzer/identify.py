@@ -79,31 +79,36 @@ def _listen(link: Link, seconds: float, session: SessionWriter, chan: str,
 
 def _probe_pylontech(link: Link, ver: int, adr: int, cid2: int,
                      info: str, timeout: float = 0.5,
-                     session: SessionWriter | None = None, chan: str = "id"):
+                     session: SessionWriter | None = None, chan: str = "id",
+                     retries: int = 1):
+    """Send one request, wait for one framed reply. Silence is retried
+    (`retries` extra attempts) - real BMSes occasionally drop a request."""
     req = F.encode_frame(ver, adr, 0x46, cid2, info)
-    link.flush_input()
-    t0 = time.perf_counter()
-    link.write(req)
-    if session:
-        session.log(chan, "tx", req, "frame",
-                    decoded=F.parse_frame(req).to_dict(), note="probe")
-    acc = FrameAccumulator()
-    deadline = t0 + timeout
-    while time.perf_counter() < deadline:
-        chunk = link.read(timeout=min(0.1, max(0.01, deadline - time.perf_counter())))
-        if not chunk:
-            continue
-        for ev in acc.feed(chunk):
-            if ev.kind == "frame":
-                pf = F.parse_frame(ev.data)
-                latency = round((ev.ts - t0) * 1000, 1)
-                if session:
-                    session.log(chan, "rx", ev.data, "frame",
-                                decoded=pf.to_dict(), errors=pf.errors,
-                                note=f"probe answer, latency_ms={latency}")
-                return pf, latency
-            elif session:
-                session.log(chan, "rx", ev.data, "raw", note="during probe")
+    for attempt in range(1 + retries):
+        link.flush_input()
+        t0 = time.perf_counter()
+        link.write(req)
+        if session:
+            session.log(chan, "tx", req, "frame",
+                        decoded=F.parse_frame(req).to_dict(),
+                        note="probe" if attempt == 0 else f"probe retry {attempt}")
+        acc = FrameAccumulator()
+        deadline = t0 + timeout
+        while time.perf_counter() < deadline:
+            chunk = link.read(timeout=min(0.1, max(0.01, deadline - time.perf_counter())))
+            if not chunk:
+                continue
+            for ev in acc.feed(chunk):
+                if ev.kind == "frame":
+                    pf = F.parse_frame(ev.data)
+                    latency = round((ev.ts - t0) * 1000, 1)
+                    if session:
+                        session.log(chan, "rx", ev.data, "frame",
+                                    decoded=pf.to_dict(), errors=pf.errors,
+                                    note=f"probe answer, latency_ms={latency}")
+                    return pf, latency
+                elif session:
+                    session.log(chan, "rx", ev.data, "raw", note="during probe")
     return None, None
 
 
