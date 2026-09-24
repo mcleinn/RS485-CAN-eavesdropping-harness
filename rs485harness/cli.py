@@ -596,7 +596,7 @@ def build_parser() -> argparse.ArgumentParser:
                                     "temps, limits, firmware, serial) to JSON")
     p.add_argument("--port", required=True)
     p.add_argument("--baud", type=int, default=115200)
-    p.add_argument("--adrs", help="comma-separated addresses (default: scan 0..7)")
+    p.add_argument("--adrs", help="comma-separated addresses (default: scan 0..15)")
     p.add_argument("--ver", help="protocol version byte hex (default 20)")
     common(p)
     p.set_defaults(fn=cmd_dump)

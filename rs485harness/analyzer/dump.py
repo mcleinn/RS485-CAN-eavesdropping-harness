@@ -77,7 +77,7 @@ def dump_unit(link: Link, adr: int, ver: int, session: SessionWriter,
 
 
 def detect_addresses(link: Link, ver: int, session: SessionWriter, chan: str,
-                     scan_range=range(0, 8)) -> list[int]:
+                     scan_range=range(0, 16)) -> list[int]:
     found = []
     for a in scan_range:
         pf, _ = _probe_pylontech(link, ver, a, 0x42, f"{max(a, 1):02X}",
@@ -92,7 +92,7 @@ def dump_stack(link: Link, session: SessionWriter, adrs: list[int] | None = None
     on_event = on_event or (lambda s: None)
     session.note(f"dump start on {link.name} ver={ver:02X}", chan)
     if adrs is None:
-        on_event("scanning for pack addresses (0..7) ...")
+        on_event("scanning for pack addresses (0..15) ...")
         adrs = detect_addresses(link, ver, session, chan)
         on_event(f"responding addresses: {[f'{a:02X}' for a in adrs]}")
     units = [dump_unit(link, a, ver, session, chan, on_event) for a in adrs]
