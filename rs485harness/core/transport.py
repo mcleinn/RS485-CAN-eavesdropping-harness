@@ -49,10 +49,19 @@ class SerialLink(Link):
                  echo_suppress: bool | None = None):
         import serial  # deferred so loopback-only use needs no pyserial
         self._serial_mod = serial
+        # write_timeout: a write must never block forever (FTDI drivers can
+        # stall a write/flush indefinitely if the device wedges).
         self.ser = serial.Serial(port, baud, bytesize=8, parity="N",
-                                 stopbits=1, timeout=0.05)
+                                 stopbits=1, timeout=0.05, write_timeout=1.0,
+                                 rtscts=False, dsrdtr=False, xonxoff=False)
         self.name = name or port
         self.port = port
+        # stall watchdog bookkeeping: (kind, started_at) while a blocking
+        # serial call is in progress; the watchdog cancels calls that exceed
+        # STALL_SECONDS so a wedged driver cannot hang the tool.
+        self._inflight: tuple[str, float] | None = None
+        self.write_timeouts = 0
+        _watchdog.register(self)
         # None = unknown (can be determined via detect_echo on a quiet bus)
         self.echo_suppress = echo_suppress
         self._pushback = b""
@@ -70,16 +79,31 @@ class SerialLink(Link):
             data, self._pushback = self._pushback, b""
             return Chunk(time.perf_counter(), data)
         self.ser.timeout = timeout
-        first = self.ser.read(1)
-        if not first:
-            return None
-        n = self.ser.in_waiting
-        data = first + (self.ser.read(n) if n else b"")
+        self._inflight = ("read", time.perf_counter())
+        try:
+            first = self.ser.read(1)
+            if not first:
+                return None
+            n = self.ser.in_waiting
+            data = first + (self.ser.read(n) if n else b"")
+        finally:
+            self._inflight = None
         return Chunk(time.perf_counter(), data)
 
     def write(self, data: bytes) -> None:
-        self.ser.write(data)
-        self.ser.flush()
+        self._inflight = ("write", time.perf_counter())
+        try:
+            self.ser.write(data)   # bounded by write_timeout; no flush()
+        except self._serial_mod.SerialTimeoutException:
+            # TX did not drain within write_timeout: the driver/device is
+            # not accepting bytes (wedged adapter, flow-control line held,
+            # port not really connected). Record it and let the caller's
+            # normal "no reply" path proceed instead of hanging or crashing.
+            self.write_timeouts += 1
+            print(f"[{self.name}] WRITE TIMEOUT - TX stalled "
+                  f"(#{self.write_timeouts}); bytes not sent", flush=True)
+        finally:
+            self._inflight = None
         if self.echo_suppress:
             self._eat_echo(data)
 
@@ -104,7 +128,6 @@ class SerialLink(Link):
         self.echo_suppress = False
         try:
             self.ser.write(probe)
-            self.ser.flush()
             self.ser.timeout = 0.2
             got = self.ser.read(len(probe))
             self.echo_suppress = got == probe
@@ -118,7 +141,72 @@ class SerialLink(Link):
         self.ser.reset_input_buffer()
 
     def close(self) -> None:
-        self.ser.close()
+        _watchdog.unregister(self)
+        try:
+            self.ser.close()
+        except Exception:
+            pass
+
+
+class _StallWatchdog:
+    """Cancels serial calls that block longer than STALL_SECONDS.
+
+    Windows serial drivers (FTDI included) can wedge a read/write in kernel
+    mode with no timeout honoured; the process then cannot even be killed
+    until the device is unplugged. pyserial exposes CancelIoEx via
+    cancel_read()/cancel_write(); a daemon thread polls registered links and
+    fires them when a call has overrun. The cancelled call raises/returns
+    empty, the tool's own timeout logic then proceeds normally.
+    """
+
+    STALL_SECONDS = 4.0
+    POLL_S = 0.25
+
+    def __init__(self):
+        self._links: set = set()
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self.stalls: list[str] = []
+
+    def register(self, link) -> None:
+        with self._lock:
+            self._links.add(link)
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(target=self._run, daemon=True,
+                                                name="serial-stall-watchdog")
+                self._thread.start()
+
+    def unregister(self, link) -> None:
+        with self._lock:
+            self._links.discard(link)
+
+    def _run(self) -> None:
+        while True:
+            time.sleep(self.POLL_S)
+            with self._lock:
+                links = list(self._links)
+            now = time.perf_counter()
+            for link in links:
+                inflight = getattr(link, "_inflight", None)
+                if not inflight:
+                    continue
+                kind, t0 = inflight
+                if now - t0 > self.STALL_SECONDS:
+                    msg = (f"[watchdog] {link.name}: serial {kind} stalled "
+                           f"{now - t0:.1f}s - cancelling (driver wedge?)")
+                    self.stalls.append(msg)
+                    print(msg, flush=True)
+                    try:
+                        if kind == "read":
+                            link.ser.cancel_read()
+                        else:
+                            link.ser.cancel_write()
+                    except Exception as e:  # cancel unsupported/failed
+                        print(f"[watchdog] cancel failed: {e}", flush=True)
+                    link._inflight = None
+
+
+_watchdog = _StallWatchdog()
 
 
 class LoopbackEnd(Link):

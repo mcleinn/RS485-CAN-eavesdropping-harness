@@ -27,6 +27,22 @@ from .simulators.battery_sim import BatterySimulator
 from .simulators.inverter_sim import InverterSimulator
 
 
+def _arm_deadline(seconds, what: str) -> None:
+    """Hard process deadline: a one-shot tool must never run open-ended.
+    Prints a diagnostic and exits(3) if the work outlives the budget (e.g. a
+    serial call wedged in a driver)."""
+    if not seconds:
+        return
+    import os, threading
+
+    def _fire():
+        print(f"\n[deadline] {what} exceeded --max-seconds={seconds:g}; "
+              f"aborting. If this recurs the adapter may be wedged - "
+              f"unplug/replug it.", flush=True)
+        os._exit(3)
+    threading.Timer(seconds, _fire).start()
+
+
 def _print(args, human: str, data: dict) -> None:
     if args.json:
         print(json.dumps(data, ensure_ascii=False, indent=2, default=str))
@@ -138,6 +154,7 @@ def cmd_inverter_sim(args) -> int:
 
 
 def cmd_identify(args) -> int:
+    _arm_deadline(getattr(args, 'max_seconds', None), 'identify')
     from .analyzer.identify import identify
     sess = S.SessionWriter(args.session or S.new_session_path("identify"))
     link = _open_serial(args.port, 9600, "id")
@@ -159,6 +176,7 @@ def cmd_identify(args) -> int:
 
 
 def cmd_send(args) -> int:
+    _arm_deadline(getattr(args, 'max_seconds', None), 'send')
     """Send one frame (fields or raw hex), wait for and decode the reply."""
     from .scripting import build_frame
     from .core.transport import FrameAccumulator
@@ -211,6 +229,7 @@ def cmd_send(args) -> int:
 
 
 def cmd_script(args) -> int:
+    _arm_deadline(getattr(args, 'max_seconds', None), 'script')
     from .scripting import load_scenario, run_scenario, ScenarioError
     try:
         scenario = load_scenario(args.scenario)
@@ -240,6 +259,7 @@ def cmd_script(args) -> int:
 
 
 def cmd_soc(args) -> int:
+    _arm_deadline(getattr(args, 'max_seconds', None), 'soc')
     """Quick per-pack SOC/V/I table via one 0x42 'FF' (all packs) poll."""
     from .analyzer.identify import _probe_pylontech
     sess = S.SessionWriter(args.session or S.new_session_path("soc"))
@@ -284,6 +304,7 @@ def cmd_soc(args) -> int:
 
 
 def cmd_dump(args) -> int:
+    _arm_deadline(getattr(args, 'max_seconds', None), 'dump')
     from .analyzer.dump import dump_stack, format_dump
     sess = S.SessionWriter(args.session or S.new_session_path("dump"))
     link = _open_serial(args.port, args.baud, "dump")
@@ -301,6 +322,7 @@ def cmd_dump(args) -> int:
 
 
 def cmd_discover(args) -> int:
+    _arm_deadline(getattr(args, 'max_seconds', None), 'discover')
     from .analyzer.discover import discover, format_discovery
     sess = S.SessionWriter(args.session or S.new_session_path("discover"))
     link = _open_serial(args.port, args.baud, "disc")
@@ -369,6 +391,7 @@ def cmd_bridge(args) -> int:
 
 
 def cmd_selftest(args) -> int:
+    _arm_deadline(getattr(args, 'max_seconds', None), 'selftest')
     from .analyzer.selftest import run_selftest
     print("Self-test requires ch1 and ch2 joined on one RS485 bus: "
           "A-A, B-B (straight, not crossed) plus GND.", flush=True)
@@ -444,6 +467,9 @@ def build_parser() -> argparse.ArgumentParser:
     def common(p, session=True):
         p.add_argument("--json", action="store_true",
                        help="machine-readable JSON output")
+        p.add_argument("--max-seconds", type=float, default=240,
+                       help="hard time budget for one-shot tools (default 240; "
+                            "0 = none)")
         if session:
             p.add_argument("--session", help="session JSONL path (default: captures/<ts>-<cmd>.jsonl)")
 
