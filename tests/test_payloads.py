@@ -97,6 +97,35 @@ def test_92_93_roundtrip():
     assert d["serial_number"] == s.serial_number
 
 
+def _build_42_module_raw(ncells, cell_mv, current_da, voltage_mv,
+                         rem_mah, tot_mah, cycles, bms_temp_c=25.0):
+    parts = [f"{ncells:02X}"] + [f"{mv:04X}" for mv in cell_mv]
+    parts.append("01")  # 1 temperature sensor
+    parts.append(f"{P.c_to_k10(bms_temp_c):04X}")
+    parts.append(f"{current_da & 0xFFFF:04X}")
+    parts.append(f"{voltage_mv:04X}")
+    parts.append(f"{rem_mah:04X}")
+    parts.append("02")  # user-defined items <=2 -> 16-bit capacities
+    parts.append(f"{tot_mah:04X}")
+    parts.append(f"{cycles:04X}")
+    return "".join(parts)
+
+
+def test_decode_42_multi():
+    # [InfoFlag=00][NumberOfModules=02][module1][module2]
+    m1 = _build_42_module_raw(16, [3300] * 16, -50, 52800, 15000, 30000, 120)
+    m2 = _build_42_module_raw(16, [3310] * 16, -50, 52900, 24000, 30000, 118)
+    info = "00" + "02" + m1 + m2
+    d = P.decode_42_multi(info)
+    assert d["n_modules"] == 2
+    assert d["modules"][0]["soc_percent"] == 50.0   # 15/30
+    assert d["modules"][1]["soc_percent"] == 80.0   # 24/30
+    assert d["modules"][0]["n_cells"] == 16
+    assert d["modules"][0]["current_a"] == -5.0
+    assert d["stack_soc_percent"] == 65.0           # 39/60
+    assert d["modules"][1]["voltage_v"] == 52.9
+
+
 def test_overrides():
     s = preset("seplos-280l")
     apply_overrides(s, {"soc": "20", "current_a": "-15",

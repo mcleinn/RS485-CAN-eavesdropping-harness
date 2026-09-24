@@ -18,6 +18,9 @@ Linux/Raspberry Pi.
   sweep (baud × address × protocol version × command family, plus
   Voltronic-LIB and Seplos-native Modbus probes) → plain-language verdicts
   including which setting to switch when protocols don't match.
+- **Read a Pylontech stack**: `soc` (quick per-pack SOC/V/I table via one
+  all-packs poll) and `dump` (complete per-unit state — every cell voltage,
+  temps, limits, firmware, serial — to JSON for later analysis).
 - **Discover** ("what do they offer?"): full inventory of a responder —
   every command classified supported/unsupported/error/silent, all
   payloads decoded into a state snapshot, dialect quirks flagged; Modbus

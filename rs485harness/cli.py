@@ -239,6 +239,67 @@ def cmd_script(args) -> int:
     return 0
 
 
+def cmd_soc(args) -> int:
+    """Quick per-pack SOC/V/I table via one 0x42 'FF' (all packs) poll."""
+    from .analyzer.identify import _probe_pylontech
+    sess = S.SessionWriter(args.session or S.new_session_path("soc"))
+    link = _open_serial(args.port, args.baud, "soc")
+    ver = int(args.ver, 16) if args.ver else 0x20
+    adrs = [int(args.adr, 0)] if args.adr is not None else [2, 0, 1, 0x12]
+    data = None
+    used = None
+    for adr in adrs:
+        pf, lat = _probe_pylontech(link, ver, adr, 0x42, "FF",
+                                   session=sess, chan="soc", timeout=args.timeout)
+        if pf is not None and pf.ok and pf.info:
+            d = P.decode_42_multi(pf.info)
+            if d.get("modules"):
+                data, used = d, adr
+                break
+    if data is None:
+        _print(args, "no multi-pack response (try --baud 115200, or run "
+                     "`rsh identify` to find the address/baud)",
+               {"error": "no response", "session": str(sess.path)})
+        sess.close(); link.close(); return 2
+    rows = []
+    for i, m in enumerate(data["modules"], 1):
+        rows.append({"pack": i, "soc_percent": m.get("soc_percent"),
+                     "voltage_v": m.get("voltage_v"), "current_a": m.get("current_a"),
+                     "remaining_ah": m.get("remaining_ah"),
+                     "total_ah": m.get("total_ah"), "cycles": m.get("cycles")})
+    human = [f"SOC via ADR {used:02X}  ({data['n_modules']} packs, stack "
+             f"{data['stack_soc_percent']}%)",
+             f"{'pack':>4} {'SOC%':>5} {'V':>7} {'A':>7} {'remAh':>7} {'totAh':>7} {'cyc':>5}"]
+    for r in rows:
+        human.append(f"{r['pack']:>4} {r['soc_percent']!s:>5} "
+                     f"{r['voltage_v']!s:>7} {r['current_a']!s:>7} "
+                     f"{r['remaining_ah']!s:>7} {r['total_ah']!s:>7} "
+                     f"{r['cycles']!s:>5}")
+    out = {"address": used, "n_packs": data["n_modules"],
+           "stack_soc_percent": data["stack_soc_percent"], "packs": rows,
+           "session": str(sess.path)}
+    _print(args, "\n".join(human), out)
+    sess.close(); link.close()
+    return 0
+
+
+def cmd_dump(args) -> int:
+    from .analyzer.dump import dump_stack, format_dump
+    sess = S.SessionWriter(args.session or S.new_session_path("dump"))
+    link = _open_serial(args.port, args.baud, "dump")
+    ver = int(args.ver, 16) if args.ver else 0x20
+    adrs = [int(a, 0) for a in args.adrs.split(",")] if args.adrs else None
+    report = dump_stack(link, sess, adrs=adrs, ver=ver,
+                        on_event=_quiet if args.json else _echo)
+    report["session"] = str(sess.path)
+    report_path = S.save_report(sess.path, report, "dump")
+    report["report_file"] = str(report_path)
+    _print(args, format_dump(report) + f"\nsession: {sess.path}\n"
+           f"full JSON: {report_path}", report)
+    sess.close(); link.close()
+    return 0
+
+
 def cmd_discover(args) -> int:
     from .analyzer.discover import discover, format_discovery
     sess = S.SessionWriter(args.session or S.new_session_path("discover"))
@@ -468,6 +529,27 @@ def build_parser() -> argparse.ArgumentParser:
                    help="responder mode: run seconds then stop")
     common(p)
     p.set_defaults(fn=cmd_script)
+
+    p = sub.add_parser("soc", help="quick per-pack SOC/V/I table (0x42 FF, "
+                                   "all packs in one poll)")
+    p.add_argument("--port", required=True)
+    p.add_argument("--baud", type=int, default=115200,
+                   help="Pylontech monitoring baud (default 115200; use 9600 "
+                        "for the inverter-link protocol)")
+    p.add_argument("--adr", help="poll address (default: try 2,0,1,12)")
+    p.add_argument("--ver", help="protocol version byte hex (default 20)")
+    p.add_argument("--timeout", type=float, default=1.0)
+    common(p)
+    p.set_defaults(fn=cmd_soc)
+
+    p = sub.add_parser("dump", help="complete per-unit battery state (cells, "
+                                    "temps, limits, firmware, serial) to JSON")
+    p.add_argument("--port", required=True)
+    p.add_argument("--baud", type=int, default=115200)
+    p.add_argument("--adrs", help="comma-separated addresses (default: scan 0..7)")
+    p.add_argument("--ver", help="protocol version byte hex (default 20)")
+    common(p)
+    p.set_defaults(fn=cmd_dump)
 
     p = sub.add_parser("discover", help="full capability + state inventory "
                                         "of a responder (run identify first)")

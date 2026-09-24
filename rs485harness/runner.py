@@ -237,6 +237,54 @@ class Menu:
         sess.close()
         link.close()
 
+    def op_soc(self) -> None:
+        from .analyzer.identify import _probe_pylontech
+        from .protocols.pylontech import payloads as P
+        port = self.pick_port("soc")
+        if not port:
+            return
+        baud = int(self.ask("baud", "115200"))
+        sess = S.SessionWriter(S.new_session_path("soc"))
+        link = SerialLink(port, baud, name="soc")
+        data = used = None
+        for adr in (2, 0, 1, 0x12):
+            pf, _ = _probe_pylontech(link, 0x20, adr, 0x42, "FF",
+                                     session=sess, chan="soc", timeout=1.0)
+            if pf is not None and pf.ok and pf.info:
+                d = P.decode_42_multi(pf.info)
+                if d.get("modules"):
+                    data, used = d, adr
+                    break
+        if not data:
+            print("  no multi-pack response (try baud 115200 / run identify)")
+        else:
+            print(f"  ADR {used:02X}, {data['n_modules']} packs, stack "
+                  f"{data['stack_soc_percent']}%")
+            for i, m in enumerate(data["modules"], 1):
+                print(f"   pack{i}: SOC {m.get('soc_percent')}%  "
+                      f"{m.get('voltage_v')}V  {m.get('current_a')}A  "
+                      f"cyc {m.get('cycles')}")
+        print(f"  session: {sess.path}")
+        sess.close(); link.close()
+
+    def op_dump(self) -> None:
+        from .analyzer.dump import dump_stack, format_dump
+        port = self.pick_port("dump")
+        if not port:
+            return
+        baud = int(self.ask("baud", "115200"))
+        adrs_in = self.ask("addresses comma-sep (empty = scan 0..7)", "")
+        adrs = [int(a, 0) for a in adrs_in.split(",")] if adrs_in else None
+        sess = S.SessionWriter(S.new_session_path("dump"))
+        link = SerialLink(port, baud, name="dump")
+        print("dumping (blocks menu) ...")
+        report = dump_stack(link, sess, adrs=adrs,
+                            on_event=lambda l: print(l, flush=True))
+        report_path = S.save_report(sess.path, report, "dump")
+        print("\n" + format_dump(report))
+        print(f"session: {sess.path}\nfull JSON: {report_path}")
+        sess.close(); link.close()
+
     def op_sniff(self) -> None:
         from .analyzer.sniff import Sniffer
         p1 = self.pick_port("sniff ch1")
@@ -431,6 +479,8 @@ class Menu:
         ("selftest", "adapter self-test (ch1+ch2 cross-wired)", op_selftest),
         ("identify", "'who is there?' scan on a channel", op_identify),
         ("discover", "full capability + state inventory of a responder", op_discover),
+        ("soc", "quick per-pack SOC/V/I table (all packs)", op_soc),
+        ("dump", "complete per-unit battery state -> JSON", op_dump),
         ("battery-sim", "simulate a battery (choose profile + channel)", op_battery_sim),
         ("inverter-sim", "simulate an inverter (choose profile + channel)", op_inverter_sim),
         ("sniff", "passive capture on 1-2 channels", op_sniff),

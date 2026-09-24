@@ -126,6 +126,32 @@ def test_v35_adr12_poll(tmp_path):
     assert res61["payload"]["max_cell_module"] == "0101"
 
 
+def test_dump_full_unit_state(tmp_path):
+    """dump_stack against a battery-sim (listening only on ADR 2) collects a
+    complete per-unit record: identity/firmware, serial, limits, cells, SOC."""
+    from rs485harness.analyzer.dump import dump_stack
+    sess = make_session(tmp_path, "dump")
+    end_dump, end_bat = loopback_pair("dump", "bat")
+    profile = DialectProfile(**{**BATTERY_PROFILES["ideal-pylontech"].to_dict(),
+                                "response_delay_s": 0.0, "listen_adrs": (0x02,)})
+    state = preset("seplos-280l")
+    state.soc_percent = 63
+    bat = BatterySimulator(end_bat, state, profile, sess, chan="bat")
+    bat.start()
+    report = dump_stack(end_dump, sess, adrs=[0x02], chan="dump")
+    bat.stop()
+    sess.close()
+    assert report["n_units"] == 1
+    u = report["units"][0]
+    assert u["identity"]["device_name"] == "MASON280L"
+    assert u["identity"]["software_version"] == [1, 5]
+    assert u["serial"]["serial_number"] == state.serial_number
+    assert u["system_parameters"]["cell_high_limit_v"] == 3.65
+    assert len(u["analog"]["modules"][0]["cell_v"]) == 16
+    assert u["protocol_version"] == "20"
+    assert u["summary"]["n_cells"] == 16
+
+
 def test_state_reflected_in_responses(tmp_path):
     state = preset("ideal")
     state.soc_percent = 17

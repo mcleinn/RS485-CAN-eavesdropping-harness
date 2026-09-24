@@ -224,10 +224,21 @@ def build_42_single(s, module_number: int = 0) -> str:
         out.append(f"{c_to_k10(t):04X}")
     out.append(f"{s.current_da & 0xFFFF:04X}")
     out.append(f"{s.voltage_mv:04X}")
-    out.append(f"{min(s.remaining_mah, 65535):04X}")
-    out.append("02")  # user defined items (<=2 -> 16-bit capacities)
-    out.append(f"{min(s.total_mah, 65535):04X}")
-    out.append(f"{s.cycles:04X}")
+    big = s.remaining_mah > 65535 or s.total_mah > 65535
+    if big:
+        # 24-bit capacity extension (user-defined items > 2) for packs whose
+        # capacity exceeds the 16-bit field, e.g. 280/314 Ah class
+        out.append(f"{min(s.remaining_mah, 65535):04X}")  # legacy 16-bit slot
+        out.append("04")                                   # user items > 2
+        out.append(f"{min(s.total_mah, 65535):04X}")       # legacy 16-bit slot
+        out.append(f"{s.cycles:04X}")
+        out.append(f"{s.remaining_mah & 0xFFFFFF:06X}")
+        out.append(f"{s.total_mah & 0xFFFFFF:06X}")
+    else:
+        out.append(f"{s.remaining_mah:04X}")
+        out.append("02")                                   # <=2 -> 16-bit only
+        out.append(f"{s.total_mah:04X}")
+        out.append(f"{s.cycles:04X}")
     return "".join(out)
 
 
@@ -280,7 +291,41 @@ def _decode_42_module(r: HexReader, ncells: int) -> dict:
     else:
         m["remaining_ah"] = rem1 / 1000
         m["total_ah"] = tot1 / 1000
+    m["soc_percent"] = (round(m["remaining_ah"] / m["total_ah"] * 100, 1)
+                        if m["total_ah"] else None)
     return m
+
+
+def decode_42_multi(info: str) -> dict:
+    """Decode a 0x42 'get analog value' response for ALL packs (request
+    INFO = 'FF'): [InfoFlag][NumberOfModules][per-module...]. Returns every
+    pack individually plus a stack aggregate. Tolerant of an absent leading
+    InfoFlag byte."""
+    for skip_flag in (True, False):
+        try:
+            r = HexReader(info)
+            flag = r.u8() if skip_flag else None
+            nmod = r.u8()
+            if not (1 <= nmod <= 16):
+                raise ValueError(f"implausible module count {nmod}")
+            modules = []
+            for _ in range(nmod):
+                ncells = r.u8()
+                if not (1 <= ncells <= 48):
+                    raise ValueError(f"implausible cell count {ncells}")
+                modules.append(_decode_42_module(r, ncells))
+            rem = sum(m["remaining_ah"] for m in modules)
+            tot = sum(m["total_ah"] for m in modules)
+            return {
+                "info_flag": f"{flag:02X}" if flag is not None else None,
+                "n_modules": nmod, "modules": modules,
+                "stack_remaining_ah": round(rem, 3),
+                "stack_total_ah": round(tot, 3),
+                "stack_soc_percent": round(rem / tot * 100, 1) if tot else None,
+            }
+        except (ValueError, IndexError):
+            continue
+    return {"error": "could not parse multi-pack 0x42 response", "info": info}
 
 
 def build_47(s) -> str:
