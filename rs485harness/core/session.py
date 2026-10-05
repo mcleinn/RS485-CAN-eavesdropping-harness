@@ -36,12 +36,25 @@ class SessionWriter:
 
     def log(self, chan: str, direction: str, data: bytes, kind: str = "frame",
             decoded: dict | None = None, errors: list | None = None,
-            note: str | None = None, ts: float | None = None) -> dict:
+            note: str | None = None, ts: float | None = None,
+            ts_mono: float | None = None, **extra) -> dict:
+        """ts_mono = perf_counter() at *arrival* of the bytes; the wall-clock
+        `t` is then back-computed so records carry arrival time, not log
+        time. extra: flow ("INV->BMS"/"BMS->INV"), mode (tap/transparent/
+        modify), or anything else worth keeping per record."""
+        now_wall, now_mono = time.time(), time.perf_counter()
+        if ts is None:
+            ts = now_wall - (now_mono - ts_mono) if ts_mono is not None else now_wall
         rec = {
-            "t": round(ts if ts is not None else time.time(), 4),
-            "chan": chan, "dir": direction, "kind": kind,
+            "t": round(ts, 4),
+            "chan": chan, "dir": direction, "kind": kind, "len": len(data),
             "hex": data.hex().upper(), "ascii": printable_ascii(data),
         }
+        if ts_mono is not None:
+            rec["t_mono"] = round(ts_mono, 4)
+        for k, v in extra.items():
+            if v is not None:
+                rec[k] = v
         if decoded is not None:
             rec["decoded"] = decoded
         if errors:
@@ -57,8 +70,15 @@ class SessionWriter:
             self.counts[key] = self.counts.get(key, 0) + 1
         return rec
 
-    def note(self, text: str, chan: str = "-") -> None:
-        self.log(chan, "-", b"", kind="note", note=text)
+    def note(self, text: str, chan: str = "-", **extra) -> None:
+        self.log(chan, "-", b"", kind="note", note=text, **extra)
+
+    def mark(self, text: str) -> None:
+        """User marker aligned with the traffic (e.g. 'MARK maxcell=3.550')."""
+        text = text.strip()
+        if not text.upper().startswith("MARK"):
+            text = "MARK " + text
+        self.log("-", "-", b"", kind="note", note=text, marker=True)
 
     def close(self) -> None:
         with self._lock:
@@ -73,6 +93,28 @@ def save_report(session_path: Path | str, report: dict, kind: str = "report") ->
     out.write_text(json.dumps(report, indent=2, ensure_ascii=False,
                               default=str), encoding="utf-8")
     return out
+
+
+def start_marker_reader(session: "SessionWriter", on_event=None,
+                        enabled: bool = True) -> threading.Thread | None:
+    """Background thread: each line typed on stdin while a capture runs
+    becomes a timestamped MARK note in the session. Only active when stdin
+    is an interactive terminal (otherwise returns None)."""
+    import sys
+    if not enabled or not sys.stdin or not sys.stdin.isatty():
+        return None
+
+    def _run():
+        for line in sys.stdin:
+            text = line.strip()
+            if not text:
+                continue
+            session.mark(text)
+            if on_event:
+                on_event(f"[marker] {text}")
+    t = threading.Thread(target=_run, daemon=True, name="marker-reader")
+    t.start()
+    return t
 
 
 def read_session(path: Path | str):

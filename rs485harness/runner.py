@@ -320,11 +320,21 @@ class Menu:
             adr = self.ask("  force response ADR toward ch1 (hex, empty=no)", "")
             if adr:
                 tr.force_adr["ch2->ch1"] = int(adr, 16)
+        pol = self.ask("payload policy on BMS->INV (e.g. cap:ccl_max=40; "
+                       "empty = none, keeps transparent mode)", "")
+        if pol:
+            from .analyzer.policy import PolicyEngine, make_policy
+            tr = tr or Translator()
+            try:
+                tr.engine = PolicyEngine(make_policy(pol))
+            except ValueError as e:
+                print(f"  {e}"); return
         sess = S.SessionWriter(S.new_session_path("bridge"))
         a = SerialLink(p1, baud, name="ch1")
         b = SerialLink(p2, baud, name="ch2")
         br = Bridge(a, b, sess, translator=tr,
                     on_event=self.on_event_for("bridge"))
+        print(f"  MODE={br.mode}" + (f" [{tr.describe()}]" if tr else ""))
         job = Job(f"bridge {p1}<->{p2}", br.run, br.stop, sess.path,
                   links=(a, b))
         self.jobs.append(job)
@@ -406,6 +416,28 @@ class Menu:
         report_path = S.save_report(sess.path, stats, "script")
         print(f"stats: {stats}\nsession: {sess.path}\nreport: {report_path}")
         sess.close(); link.close()
+
+    def op_timeline(self) -> None:
+        from .analyzer.timeline import TimelineConfig, build_timeline, export, format_timeline
+        caps = sorted(S.CAPTURE_DIR.glob("**/*.jsonl"))
+        if not caps:
+            print("no captures yet"); return
+        path = self.ask("session file", str(caps[-1]))
+        res = build_timeline(path, TimelineConfig())
+        paths = export(res, path)
+        print(format_timeline(res, max_events=120))
+        print("exports: " + ", ".join(f"{k}={v}" for k, v in paths.items()))
+
+    def op_mark(self) -> None:
+        caps = sorted(S.CAPTURE_DIR.glob("**/*.jsonl"))
+        if not caps:
+            print("no captures yet"); return
+        path = self.ask("session file", str(caps[-1]))
+        text = self.ask("marker text (e.g. maxcell=3.550)")
+        if not text:
+            return
+        sess = S.SessionWriter(path); sess.mark(text); sess.close()
+        print(f"  marked {path}")
 
     def op_decode(self) -> None:
         from .protocols.pylontech import frames as F
@@ -490,6 +522,8 @@ class Menu:
         ("script", "run a JSON scenario (master seq / responder rules)", op_script),
         ("decode", "decode a pasted frame", op_decode),
         ("diagnose", "run hypothesis checks on a capture", op_diagnose),
+        ("timeline", "charge-control timeline (events/timing/findings/CSV)", op_timeline),
+        ("mark", "append a MARK note to a capture", op_mark),
         ("jobs", "list / stop running jobs", op_jobs),
     ]
 

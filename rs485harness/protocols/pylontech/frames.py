@@ -113,6 +113,7 @@ class ParsedFrame:
     cid2: int | None = None  # command code (request) or RTN (response)
     lenid: int | None = None
     info: str = ""
+    chksum: int | None = None  # checksum as received (valid or not)
     errors: list[str] = field(default_factory=list)
 
     @property
@@ -142,6 +143,7 @@ class ParsedFrame:
         return {
             "ver": self.ver, "adr": self.adr, "cid1": self.cid1, "cid2": self.cid2,
             "lenid": self.lenid, "info": self.info, "errors": self.errors,
+            "chksum": f"{self.chksum:04X}" if self.chksum is not None else None,
         }
 
 
@@ -175,6 +177,7 @@ def parse_frame(raw: bytes) -> ParsedFrame:
 
     body, chk_str = data[:-4], data[-4:]
     got_chk = int(chk_str, 16)
+    pf.chksum = got_chk
     want_chk = chksum(body)
     if got_chk != want_chk:
         pf.errors.append(f"chksum-mismatch got={got_chk:04X} expected={want_chk:04X}")

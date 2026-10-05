@@ -345,6 +345,56 @@ def cmd_dump(args) -> int:
     return 0
 
 
+def cmd_timeline(args) -> int:
+    from .analyzer.timeline import TimelineConfig, build_timeline, export, format_timeline
+    path = args.session
+    if not path:
+        caps = sorted(S.CAPTURE_DIR.glob("*.jsonl"))
+        if not caps:
+            print("no captures found", file=sys.stderr)
+            return 1
+        path = caps[-1]
+    cfg = TimelineConfig(large_ccl_increase_a=args.large_ccl_increase,
+                         current_tolerance_a=args.current_tolerance,
+                         response_delay_s=args.response_delay,
+                         ccl_factor=args.ccl_factor, current_factor=args.current_factor)
+    result = build_timeline(path, cfg)
+    paths = export(result, path)
+    result["exports"] = paths
+    human = format_timeline(result) + "\nexports: " + ", ".join(
+        f"{k}={v}" for k, v in paths.items())
+    slim = {k: v for k, v in result.items() if k != "series"}
+    _print(args, human, slim)
+    return 0
+
+
+def cmd_mark(args) -> int:
+    """Append a timestamped marker to a session (from another terminal, or
+    after the fact with --at ISO/epoch)."""
+    import datetime as _dt
+    path = args.session
+    if not path:
+        caps = sorted(S.CAPTURE_DIR.glob("*.jsonl"))
+        if not caps:
+            print("no captures found", file=sys.stderr)
+            return 1
+        path = caps[-1]
+    ts = None
+    if args.at:
+        try:
+            ts = float(args.at)
+        except ValueError:
+            ts = _dt.datetime.fromisoformat(args.at).timestamp()
+    sess = S.SessionWriter(path)
+    text = " ".join(args.text)
+    if not text.upper().startswith("MARK"):
+        text = "MARK " + text
+    sess.log("-", "-", b"", kind="note", note=text, marker=True, ts=ts)
+    sess.close()
+    print(f"marked {path}: {text}")
+    return 0
+
+
 def cmd_discover(args) -> int:
     _arm_deadline(getattr(args, 'max_seconds', None), 'discover')
     from .analyzer.discover import discover, format_discovery
@@ -370,7 +420,8 @@ def cmd_sniff(args) -> int:
     links["ch1"] = _open_serial(args.ch1, args.baud, "ch1")
     if args.ch2:
         links["ch2"] = _open_serial(args.ch2, args.baud, "ch2")
-    sn = Sniffer(links, sess, on_event=_quiet if args.json else _echo)
+    sn = Sniffer(links, sess, on_event=_quiet if args.json else _echo,
+                 markers=not args.no_markers)
     print(f"sniffing {', '.join(l.name for l in links.values())} @ "
           f"{args.baud} baud; Ctrl+C to stop; session: {sess.path}", flush=True)
     stats = sn.run(duration=args.duration)
@@ -382,8 +433,10 @@ def cmd_sniff(args) -> int:
 
 
 def cmd_bridge(args) -> int:
+    _arm_deadline(None, "bridge")
     from .analyzer.bridge import Bridge
     from .analyzer.translate import Translator
+    from .analyzer.policy import PolicyEngine, make_policy
     sess = S.SessionWriter(args.session or S.new_session_path("bridge"))
     a = _open_serial(args.ch1, args.baud, "ch1")
     b = _open_serial(args.ch2, args.baud, "ch2")
@@ -391,7 +444,7 @@ def cmd_bridge(args) -> int:
         a.detect_echo()
         b.detect_echo()
     tr = None
-    if args.fix_cid2_echo or args.force_ver or args.force_adr:
+    if args.fix_cid2_echo or args.force_ver or args.force_adr or args.policy:
         tr = Translator()
         if args.fix_cid2_echo:
             tr.fix_cid2_echo = {"ch1->ch2", "ch2->ch1"}
@@ -401,13 +454,23 @@ def cmd_bridge(args) -> int:
         for spec in args.force_adr or []:
             d, v = spec.split("=")
             tr.force_adr[{"a2b": "ch1->ch2", "b2a": "ch2->ch1"}[d]] = int(v, 16)
-    br = Bridge(a, b, sess, translator=tr,
-                on_event=_quiet if args.json else _echo)
-    print(f"bridging {args.ch1} <-> {args.ch2} @ {args.baud} baud "
-          f"(translate={'on' if tr else 'off'}); Ctrl+C to stop; "
-          f"session: {sess.path}", flush=True)
+        if args.policy:
+            scales = {}
+            if args.scale_a:
+                scales["a"] = args.scale_a
+            if args.scale_v:
+                scales["v"] = args.scale_v
+            tr.engine = PolicyEngine(make_policy(args.policy), scales=scales,
+                                     loss_timeout_s=args.loss_timeout)
+    br = Bridge(a, b, sess, translator=tr, role_a=args.role_ch1, role_b=args.role_ch2,
+                markers=not args.no_markers, on_event=_quiet if args.json else _echo)
+    print(f"bridging {args.ch1}({args.role_ch1}) <-> {args.ch2}({args.role_ch2}) @ "
+          f"{args.baud} baud; MODE={br.mode}"
+          + (f" [{tr.describe()}]" if tr else "")
+          + f"; Ctrl+C to stop; session: {sess.path}", flush=True)
     stats = br.run(duration=args.duration)
-    _print(args, f"stats: {stats}", {"stats": stats, "session": str(sess.path)})
+    _print(args, f"stats: {stats}", {"stats": stats, "mode": br.mode,
+                                      "session": str(sess.path)})
     sess.close()
     a.close()
     b.close()
@@ -611,13 +674,35 @@ def build_parser() -> argparse.ArgumentParser:
     common(p)
     p.set_defaults(fn=cmd_discover)
 
-    p = sub.add_parser("sniff", help="passive capture on one or two channels")
+    p = sub.add_parser("sniff", help="passive capture (tap) on one or two channels")
     p.add_argument("--ch1", required=True)
     p.add_argument("--ch2")
     p.add_argument("--baud", type=int, default=9600)
     p.add_argument("--duration", type=float)
+    p.add_argument("--no-markers", action="store_true",
+                   help="do not read MARK lines from stdin")
     common(p)
     p.set_defaults(fn=cmd_sniff)
+
+    p = sub.add_parser("timeline", help="charge-control timeline: pairing, decoded "
+                                        "series, events, timing, findings, CSV/JSON(/PNG)")
+    p.add_argument("session", nargs="?", help="session file (default: newest capture)")
+    p.add_argument("--large-ccl-increase", type=float, default=10.0, help="A")
+    p.add_argument("--current-tolerance", type=float, default=2.0, help="A over CCL")
+    p.add_argument("--response-delay", type=float, default=5.0,
+                   help="s after a CCL change before judging current vs CCL")
+    p.add_argument("--ccl-factor", type=float, default=1.0,
+                   help="scaling override for CCL/DCL (H5), e.g. 0.1")
+    p.add_argument("--current-factor", type=float, default=1.0,
+                   help="scaling override for pack current (H5)")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_timeline)
+
+    p = sub.add_parser("mark", help="append a MARK note to a session")
+    p.add_argument("text", nargs="+", help="e.g. maxcell=3.550")
+    p.add_argument("--session", help="session file (default: newest capture)")
+    p.add_argument("--at", help="timestamp (epoch or ISO) instead of now")
+    p.set_defaults(fn=cmd_mark)
 
     p = sub.add_parser("bridge", help="forward ch1<->ch2, optionally translating")
     p.add_argument("--ch1", required=True)
@@ -632,6 +717,16 @@ def build_parser() -> argparse.ArgumentParser:
                    help="e.g. b2a=20 (a=ch1, b=ch2)")
     p.add_argument("--force-adr", action="append", metavar="DIR=HEX",
                    help="e.g. b2a=02")
+    p.add_argument("--role-ch1", choices=["inverter", "battery"], default="inverter")
+    p.add_argument("--role-ch2", choices=["inverter", "battery"], default="battery")
+    p.add_argument("--policy", metavar="NAME[:k=v,...]",
+                   help="payload policy on BMS->INV responses (MODIFY mode), "
+                        "e.g. cap:ccl_max=40")
+    p.add_argument("--loss-timeout", type=float, default=10.0,
+                   help="s without a valid BMS frame before the policy resets")
+    p.add_argument("--scale-a", type=float, help="raw units per ampere (default 10)")
+    p.add_argument("--scale-v", type=float, help="raw units per volt (default 1000)")
+    p.add_argument("--no-markers", action="store_true")
     common(p)
     p.set_defaults(fn=cmd_bridge)
 

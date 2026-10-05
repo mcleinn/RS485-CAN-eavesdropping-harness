@@ -5,16 +5,27 @@ import threading
 import time
 
 from ..core.transport import Link, FrameAccumulator
-from ..core.session import SessionWriter
+from ..core.session import SessionWriter, start_marker_reader
 from ..protocols.pylontech import frames as F
 from .classify import classify_raw
 
 
+def infer_flow(pf: F.ParsedFrame) -> str | None:
+    """On a single-wire tap both directions share one channel: a request is
+    a known command with a short INFO (INV->BMS); everything else framed is
+    a response (BMS->INV)."""
+    if pf.cid2 is None:
+        return None
+    is_req = pf.cid2 in F.CID2_NAMES and len(pf.info) <= 4
+    return "INV->BMS" if is_req else "BMS->INV"
+
+
 class Sniffer:
     def __init__(self, links: dict[str, Link], session: SessionWriter,
-                 on_event=None):
+                 on_event=None, markers: bool = True):
         self.links = links
         self.session = session
+        self.markers = markers
         self.on_event = on_event or (lambda line: None)
         self.stop_event = threading.Event()
         self.stats = {chan: {"frames": 0, "raw_bytes": 0} for chan in links}
@@ -31,13 +42,17 @@ class Sniffer:
             for ev in events:
                 if ev.kind == "frame":
                     pf = F.parse_frame(ev.data)
+                    flow = infer_flow(pf)
                     self.session.log(chan, "rx", ev.data, "frame",
-                                     decoded=pf.to_dict(), errors=pf.errors)
+                                     decoded=pf.to_dict(), errors=pf.errors,
+                                     ts_mono=ev.ts, flow=flow, mode="tap")
                     self.stats[chan]["frames"] += 1
-                    self.on_event(f"[{chan}] {pf.describe('auto')}")
+                    role = "request" if flow == "INV->BMS" else "response"
+                    self.on_event(f"[{chan}] {flow or '?':8} {pf.describe(role)}")
                 else:
                     cls = classify_raw(ev.data)
-                    self.session.log(chan, "rx", ev.data, "raw", decoded=cls)
+                    self.session.log(chan, "rx", ev.data, "raw", decoded=cls,
+                                     ts_mono=ev.ts, mode="tap")
                     self.stats[chan]["raw_bytes"] += len(ev.data)
                     self.on_event(f"[{chan}] raw {len(ev.data)}B "
                                   f"({cls['verdict']}): {ev.data.hex().upper()[:64]}")
@@ -45,7 +60,10 @@ class Sniffer:
     def run(self, duration: float | None = None) -> dict:
         ends_desc = ", ".join(f"{chan}={link.name}@{getattr(link, 'baud', '?')}"
                               for chan, link in self.links.items())
-        self.session.note(f"sniff start {ends_desc}")
+        self.session.note(f"sniff start {ends_desc} mode=tap")
+        if start_marker_reader(self.session, self.on_event, self.markers):
+            self.on_event("markers: type e.g. 'MARK maxcell=3.550' + Enter "
+                          "to annotate the capture")
         for chan, link in self.links.items():
             t = threading.Thread(target=self._watch, args=(chan, link),
                                  daemon=True, name=f"sniff-{chan}")

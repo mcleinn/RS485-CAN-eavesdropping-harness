@@ -41,6 +41,15 @@ OV-warn, MaxCell, pack current and comm gaps on one millisecond axis.
 
 ## 3. Gaps to implement — prioritised
 
+> **Status 2026-10-05:** P1 items 1–6 implemented (`rsh timeline`, `rsh
+> mark` + live `MARK` input, arrival-time/flow/mode/len/chksum on every
+> record, byte-level transparent bridge). P2 implemented as **generic
+> infrastructure** (items 7–9: pluggable payload policy engine with
+> enforced invariants, two-record audit, fail-safes, loss reset, CLI
+> `--policy`); the experimental CCL *shaper policy itself* is deliberately
+> not written yet — it plugs in as a `PayloadPolicy` subclass once the
+> Phase-1 captures say what Seplos actually does. Item 10 remains open.
+
 **P1 — before tomorrow's captures (Phase 1 analysis quality)**
 1. **Capture fidelity**: arrival time from the serial chunk (`t_mono`
    perf_counter + wall `t`), explicit `direction` (BMS→INV / INV→BMS),

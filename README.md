@@ -30,6 +30,22 @@ Linux/Raspberry Pi.
   JSON scenarios — a proactive master send/branch sequence, or reactive
   "if it writes X, answer Y" responder rules. The LLM-drivable "hand me the
   wire" surface.
+- **Charge-control analysis** (`timeline`): pairs requests/responses from a
+  tap or bridge capture, decodes every charge-related field (SOC, pack V/I,
+  max/min cell, CVL, CCL, DCL, charge-enable, full-charge-request, OV-warn,
+  protections), builds a chronological event log (every CCL/CVL/enable/
+  alarm change), timing stats (poll period, latency, CCL update interval,
+  CCL→current delay, gaps), automatic findings (large CCL increases, current
+  exceeding CCL, oscillation near top of charge, gaps before a rise) and
+  CSV/JSON (+PNG with matplotlib). Live `MARK ...` markers while capturing
+  (`sniff`/`bridge` read stdin) or `rsh mark` after the fact.
+- **Modify-mode bridge infrastructure**: byte-level transparent forwarding
+  by default; with `--policy` a pluggable payload policy may rewrite
+  BMS→INV charge limits under enforced invariants (only CCL/CVL, only
+  downwards, status/protection bits locked, bad frames never rebuilt, policy
+  reset on comm loss, two-record audit of every change, exception →
+  original forwarded). Ships with a trivial `cap` policy as the pipeline
+  fixture; experimental shaping policies plug in as classes.
 - **Simulators**: ideal Pylontech battery (both command families,
   configurable dialect quirks and state: `--set soc=20 ...`) and a
   Voltronic-style inverter poller — each bindable to any COM port.
@@ -54,6 +70,9 @@ rsh identify --port COM5  # first thing to run against a real device
 
 - `docs/BENCH-CHECKLIST.md` — terse at-the-bench step card (wiring +
   exact commands + pass/fail gates)
+- `docs/CHARGE-TAPER-PLAN.md` — the Seplos↔SAKO charge-rebound
+  investigation: hypotheses, capability map, Phase-1 capture plan,
+  Phase-2 policy principle and fail-safes
 - `docs/USAGE.md` — tool reference + diagnosis strategy/playbook
 - `docs/PROTOCOL-NOTES.md` — condensed protocol ground truth (frame format,
   checksums, both command families, payload layouts, addressing quirks,
