@@ -69,3 +69,40 @@ link, run `identify` on each.
 ## After the bench
 - [ ] Keep the `captures/*.jsonl` + `*.report.json` — paste them for
       analysis. `rsh diagnose <file>` re-runs the hypothesis matrix anytime.
+
+## Step 0 - capture PC power settings (do once, before any long capture)
+
+Symptom this prevents: the FTDI adapter stays enumerated but both channels
+go deaf mid-run (seen 2026-10-06: 55 s of silence with no error; an inline
+bridge then starves the inverter, which reports a bad cable). Cause: this
+notebook only has Modern Standby (S0 low-power idle); display-off plus USB
+selective suspend lets Windows park USB devices.
+
+Applied 2026-10-06 (no admin needed):
+```
+powercfg /setacvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0
+powercfg /setdcvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 0
+powercfg /change monitor-timeout-ac 0
+powercfg /change monitor-timeout-dc 0
+powercfg /change standby-timeout-ac 0
+powercfg /change standby-timeout-dc 0
+powercfg /setactive SCHEME_CURRENT
+```
+Still open (needs admin): Device Manager > Universal Serial Bus controllers
+> each "USB Root Hub (USB 3.0)" > Power Management > untick "Allow the
+computer to turn off this device to save power".
+
+Restore the previous values afterwards (display 5 min, sleep on battery
+10 min, USB selective suspend on):
+```
+powercfg /setacvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 1
+powercfg /setdcvalueindex SCHEME_CURRENT 2a737441-1930-4402-8d77-b2bebba308a3 48e6b7a6-50f5-4782-a5d4-53bb8f07e226 1
+powercfg /change monitor-timeout-ac 5
+powercfg /change monitor-timeout-dc 5
+powercfg /change standby-timeout-dc 10
+powercfg /setactive SCHEME_CURRENT
+```
+Software backstop: `rsh bridge` reopens its ports by itself after a serial
+error and after 6 s of total silence once traffic has flowed (liveness
+guard); a passive tap is still preferable for multi-hour captures because
+a PC-side hiccup then cannot reach the inverter.
