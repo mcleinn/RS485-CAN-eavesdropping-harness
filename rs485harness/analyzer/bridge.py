@@ -28,7 +28,7 @@ import time
 import traceback
 
 from ..core.transport import Link, FrameAccumulator
-from ..core.session import SessionWriter, start_marker_reader
+from ..core.session import SessionWriter, start_marker_reader, MARKER_LEGEND
 from ..protocols.pylontech import frames as F
 from .translate import Translator
 from .timeline import LiveState
@@ -182,7 +182,7 @@ class Bridge:
         self.session.note(f"bridge start {ends_desc} mode={self.mode}{tr}",
                           mode=self.mode)
         if start_marker_reader(self.session, self.on_event, self.markers):
-            self.on_event("markers: type e.g. 'MARK maxcell=3.550' + Enter")
+            self.on_event(MARKER_LEGEND)
         target = self._pump_modify if self.mode == "modify" else self._pump_transparent
         threads = [threading.Thread(target=target, args=(chan,), daemon=True,
                                     name=f"bridge-{chan}") for chan in self.ends]

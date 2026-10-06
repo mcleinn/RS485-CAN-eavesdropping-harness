@@ -5,7 +5,7 @@ import threading
 import time
 
 from ..core.transport import Link, FrameAccumulator
-from ..core.session import SessionWriter, start_marker_reader
+from ..core.session import SessionWriter, start_marker_reader, MARKER_LEGEND
 from ..protocols.pylontech import frames as F
 from .classify import classify_raw
 from .timeline import LiveState
@@ -69,8 +69,7 @@ class Sniffer:
                               for chan, link in self.links.items())
         self.session.note(f"sniff start {ends_desc} mode=tap")
         if start_marker_reader(self.session, self.on_event, self.markers):
-            self.on_event("markers: type e.g. 'MARK maxcell=3.550' + Enter "
-                          "to annotate the capture")
+            self.on_event(MARKER_LEGEND)
         for chan, link in self.links.items():
             t = threading.Thread(target=self._watch, args=(chan, link),
                                  daemon=True, name=f"sniff-{chan}")

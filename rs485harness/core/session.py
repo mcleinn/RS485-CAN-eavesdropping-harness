@@ -115,6 +115,16 @@ def save_report(session_path: Path | str, report: dict, kind: str = "report") ->
     return out
 
 
+MARKER_LEGEND = """MARKERS (one keypress + Enter, numbered + timestamped automatically):
+  Enter      = marker "now" (note the number, describe it later)
+  r          = rebound / current rise        o = OV-warn seen on Seplos
+  l          = inverter red LED              z = current went to 0
+  u / d      = current up / down             x = something odd
+  s / e      = start / end of a phase        32 = inverter current = 32 A
+  any text   = kept verbatim                 (CCL/current/MaxCell/OV-warn are
+                                              read from the wire - no need to type them)"""
+
+
 def start_marker_reader(session: "SessionWriter", on_event=None,
                         enabled: bool = True) -> threading.Thread | None:
     """Background thread: each line typed on stdin while a capture runs
