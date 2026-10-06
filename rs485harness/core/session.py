@@ -122,7 +122,8 @@ MARKER_LEGEND = """MARKERS (one keypress + Enter, numbered + timestamped automat
   u / d      = current up / down             x = something odd
   s / e      = start / end of a phase        32 = inverter current = 32 A
   any text   = kept verbatim                 (CCL/current/MaxCell/OV-warn are
-                                              read from the wire - no need to type them)"""
+                                              read from the wire - no need to type them)
+  Ctrl+C     = stop the capture, save & close the session, print stats"""
 
 
 def start_marker_reader(session: "SessionWriter", on_event=None,
