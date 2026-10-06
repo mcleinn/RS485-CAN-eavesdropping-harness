@@ -1,6 +1,6 @@
 """Minimal Seplos BMS 3.0 service-interface responder (Modbus RTU) for
 hardware-free tests: serves function 0x04 reads and 0x10 writes on the
-PIA/PIB/SPA blocks, answers any other function with ILLEGAL FUNCTION and
+PIA/PIB/SPA blocks and 0x01 reads of the PIC/SFA status coils, answers any other function with ILLEGAL FUNCTION and
 ignores everything that is not addressed to it (e.g. Pylontech ASCII).
 
 Default register contents are the example read-out quoted in the register
@@ -46,6 +46,11 @@ class SeplosNativeSim:
                            (0x1300, EXAMPLE_SPA)):
             for i, v in enumerate(vals):
                 self.regs[base + i] = v
+        # status coils (PIC 0x1200, 144) and function switches (SFA 0x1400, 80)
+        self.coils: dict[int, bool] = {0x1200 + i: False for i in range(144)}
+        self.coils.update({0x1400 + i: False for i in range(80)})
+        for addr in (0x1241, 0x1278, 0x1279):     # Charge, both FETs on
+            self.coils[addr] = True
         self.writes: list[tuple[int, int]] = []
         self.stop_event = threading.Event()
         self._thread: threading.Thread | None = None
@@ -67,6 +72,18 @@ class SeplosNativeSim:
             data = b"".join(self.regs[start + i].to_bytes(2, "big")
                             for i in range(count))
             return _with_crc(bytes([self.slave, 0x04, len(data)]) + data), 8
+        if fn == 0x01:
+            frame = buf[:8]
+            if _with_crc(frame[:6]) != frame:
+                return None, 1
+            start, count = (frame[2] << 8) | frame[3], (frame[4] << 8) | frame[5]
+            if any(start + i not in self.coils for i in range(count)) or not count:
+                return _with_crc(bytes([self.slave, 0x81, 0x02])), 8
+            data = bytearray((count + 7) // 8)
+            for i in range(count):
+                if self.coils[start + i]:
+                    data[i // 8] |= 1 << (i % 8)
+            return _with_crc(bytes([self.slave, 0x01, len(data)]) + bytes(data)), 8
         if fn == 0x10:
             n = buf[6]
             total = 7 + n + 2

@@ -484,3 +484,128 @@ def write_setting(link: Link, session: SessionWriter, chan: str, slave: int,
         return done("written")
     return done(f"failed: read-back shows {report['after']} {unit} "
                 f"(ack: {report['write_ack']}) - the BMS did not take the value")
+
+
+# ------------------------------------------------------- status flags (PIC)
+#
+# 144 coils at 0x1200, read with function 0x01. Per-cell groups first, then
+# named pack flags; names as shown in BMS Studio.
+
+READ_COILS = 0x01
+PIC_START, PIC_COUNT = 0x1200, 144
+
+PIC_FLAGS = {
+    0x40: "Discharge", 0x41: "Charge", 0x42: "Floating charge",
+    0x43: "Full charge", 0x44: "Standby mode", 0x45: "Turn off",
+    0x48: "Cell high voltage alarm", 0x49: "Cell over voltage protection",
+    0x4A: "Cell low voltage alarm", 0x4B: "Cell under voltage protection",
+    0x4C: "Battery high voltage alarm", 0x4D: "Battery over voltage protection",
+    0x4E: "Battery low voltage alarm", 0x4F: "Battery under voltage protection",
+    0x50: "Charge high temperature alarm",
+    0x51: "Charge over temperature protection",
+    0x52: "Charge low temperature alarm",
+    0x53: "Charge under temperature protection",
+    0x54: "Discharge high temperature alarm",
+    0x55: "Discharge over temperature protection",
+    0x56: "Discharge low temperature alarm",
+    0x57: "Discharge under temperature protection",
+    0x58: "High ambient temperature alarm",
+    0x59: "Over ambient temperature protection",
+    0x5A: "Low ambient temperature alarm",
+    0x5B: "Under ambient temperature protection",
+    0x5C: "High power temperature alarm",
+    0x5D: "Over power temperature protection",
+    0x5E: "Cell temperature low heating",
+    0x60: "Charge current alarm", 0x61: "Charge over current protection",
+    0x62: "Secondary charge over current protection",
+    0x63: "Discharge current alarm", 0x64: "Discharge over current protection",
+    0x65: "Secondary discharge over current protection",
+    0x66: "Output short-circuit protection", 0x68: "Output short-circuit lock",
+    0x69: "Inverse current protection",
+    0x6A: "Secondary charge over current lock",
+    0x6B: "Secondary discharge over current lock",
+    0x6E: "Zero point uncalibrated",
+    0x72: "SOC alarm", 0x73: "SOC protection", 0x74: "Cell diff alarm",
+    0x78: "Discharge FET on", 0x79: "Charge FET on",
+    0x7A: "Current limiting FET on", 0x7B: "Temp. regulate FET on",
+    0x80: "Equilibrium module to open", 0x81: "Static equilibrium indicate",
+    0x82: "Static equilibrium overtime", 0x83: "Equalization temperature limit",
+    0x84: "Cell failure alarm",
+    0x88: "NTC failure", 0x89: "AFE failure", 0x8A: "Charge mosfets failure",
+    0x8B: "Discharge mosfets failure", 0x8C: "Celldiff failure",
+    0x8D: "Break line failure", 0x8E: "Key failure", 0x8F: "Aerosol alarm",
+}
+MODE_FLAGS = ("Discharge", "Charge", "Floating charge", "Full charge",
+              "Standby mode", "Turn off")
+FET_FLAGS = ("Discharge FET on", "Charge FET on", "Current limiting FET on",
+             "Temp. regulate FET on")
+
+
+def read_coils(link: Link, slave: int, start: int, count: int,
+               timeout: float = 1.0, session: SessionWriter | None = None,
+               chan: str = "disc", tag: str = ""):
+    """One function-0x01 read. Returns (list of bool | None, info dict)."""
+    pdu = bytes([slave, READ_COILS, start >> 8, start & 0xFF,
+                 count >> 8, count & 0xFF])
+    crc = crc16_modbus(pdu)
+    req = pdu + bytes([crc & 0xFF, crc >> 8])
+    link.flush_input()
+    t0 = time.perf_counter()
+    link.write(req)
+    if session:
+        session.log(chan, "tx", req, "raw", note=f"seplos-native coils {tag}")
+    nbytes = (count + 7) // 8
+    want = 5 + nbytes
+    buf = b""
+    deadline = t0 + timeout
+    while time.perf_counter() < deadline:
+        chunk = link.read(timeout=min(0.1, max(0.01, deadline - time.perf_counter())))
+        if not chunk:
+            continue
+        buf += chunk.data
+        if buf.startswith(req):
+            buf = buf[len(req):]
+        if len(buf) >= 5 and buf[1] == (READ_COILS | 0x80):
+            want = 5
+        if len(buf) >= want:
+            break
+    latency = round((time.perf_counter() - t0) * 1000, 1)
+    info = {"start": f"{start:04X}", "count": count, "function": READ_COILS}
+    if session and buf:
+        session.log(chan, "rx", buf, "raw",
+                    note=f"seplos-native coils answer {tag}, latency_ms={latency}")
+    if not buf:
+        info["status"] = "no answer"
+        return None, info
+    frame = buf[:want]
+    if len(frame) < want or crc16_modbus(frame[:-2]) != (frame[-2] | (frame[-1] << 8)):
+        info["status"] = f"bad frame ({len(buf)} bytes, wanted {want})"
+        return None, info
+    if frame[0] != slave:
+        info["status"] = f"answer from device {frame[0]}, asked {slave}"
+        return None, info
+    if frame[1] & 0x80:
+        name = MODBUS_EXCEPTIONS.get(frame[2], f"exception 0x{frame[2]:02X}")
+        info["status"] = f"exception {frame[2]} ({name})"
+        return None, info
+    if frame[1] != READ_COILS or frame[2] != nbytes:
+        info["status"] = "unexpected reply"
+        return None, info
+    data = frame[3:3 + nbytes]
+    bits = [bool(data[i // 8] & (1 << (i % 8))) for i in range(count)]
+    info.update(status="ok", latency_ms=latency, hex=data.hex().upper())
+    return bits, info
+
+
+def decode_pic(bits: list[bool]) -> dict:
+    """Split the 144 status coils into per-cell lists and named flags."""
+    def cells(lo, n):
+        return [i + 1 for i in range(n) if lo + i < len(bits) and bits[lo + i]]
+    flags = [name for idx, name in sorted(PIC_FLAGS.items())
+             if idx < len(bits) and bits[idx]]
+    return {"cells_low_alarm": cells(0x00, 16), "cells_high_alarm": cells(0x10, 16),
+            "temps_low_alarm": cells(0x20, 8), "temps_high_alarm": cells(0x28, 8),
+            "balancing": cells(0x30, 16),
+            "mode": [f for f in flags if f in MODE_FLAGS],
+            "fets": {f: (f in flags) for f in FET_FLAGS},
+            "flags": [f for f in flags if f not in MODE_FLAGS and f not in FET_FLAGS]}

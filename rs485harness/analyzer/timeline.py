@@ -107,9 +107,17 @@ def _extract(cid2: int, payload: dict, cfg: TimelineConfig) -> dict:
     return {k: v for k, v in out.items() if v is not None}
 
 
-def build_timeline(path: Path | str, cfg: TimelineConfig | None = None) -> dict:
+def build_timeline(path: Path | str, cfg: TimelineConfig | None = None,
+                   service_path: Path | str | None = None) -> dict:
+    """`service_path`: optional second session recorded by `rsh
+    seplos-monitor` at the same time; its records are merged by timestamp.
+    (`rsh sniff --service` already writes both into one file.)"""
     cfg = cfg or TimelineConfig()
-    recs = sorted((r for r in read_session(path)), key=lambda r: r.get("t", 0))
+    recs = list(read_session(path))
+    if service_path:
+        recs += [r for r in read_session(service_path)
+                 if str(r.get("kind", "")).startswith("service")]
+    recs.sort(key=lambda r: r.get("t", 0))
     t0 = recs[0]["t"] if recs else 0.0
     state: dict = {}
     series: list[dict] = []
@@ -125,6 +133,7 @@ def build_timeline(path: Path | str, cfg: TimelineConfig | None = None) -> dict:
     ccl_change_events: list[dict] = []
     cid2_hist: dict[str, int] = {}
     mode = None
+    svc_samples: list[dict] = []        # Seplos service-socket samples
 
     def ev(t, kind, text, **kw):
         e = {"t": round(t, 4), "t_rel": round(t - t0, 3), "kind": kind, "text": text, **kw}
@@ -145,6 +154,14 @@ def build_timeline(path: Path | str, cfg: TimelineConfig | None = None) -> dict:
                 ev(t, "note", note[:160])
             if r.get("mode"):
                 mode = r.get("mode")
+            continue
+        if r.get("kind") == "service":
+            svc_samples.append({"t": round(t, 4), "t_rel": round(t - t0, 3),
+                                **(r.get("decoded") or {})})
+            continue
+        if r.get("kind") == "service-settings":
+            if r.get("changed"):
+                ev(t, "svc-setting", r.get("note") or "setting changed")
             continue
         if r.get("kind") != "frame":
             if r.get("kind") == "raw" and r.get("len", 0):
@@ -378,9 +395,74 @@ def build_timeline(path: Path | str, cfg: TimelineConfig | None = None) -> dict:
         if not 40 <= v <= 62:
             find("unit-suspect", "warn", t0, f"CVL {v} V outside 40-62 V")
 
+    if svc_samples:
+        stats["service"] = _service_side(svc_samples, ev, find)
+        events.sort(key=lambda e: e["t"])
+
     return {"session": str(path), "config": asdict(cfg), "stats": stats,
             "series": series, "events": events, "markers": markers,
-            "findings": findings, "unanswered": len(unanswered)}
+            "findings": findings, "unanswered": len(unanswered),
+            "service_series": svc_samples}
+
+
+def _service_side(svc: list[dict], ev, find) -> dict:
+    """Events, findings and summary from Seplos service-socket samples:
+    what the battery itself reported (flags, charge switch, cells)."""
+    from .seplos_monitor import diff_samples
+    prev = None
+    last_bal_t = None
+    peaks: dict[int, float] = {}
+    flags_seen: set[str] = set()
+    modes_seen: set[str] = set()
+    worst_spread = None
+    top = None
+    for s in svc:
+        t = s["t"]
+        for text in diff_samples(prev, s, limits=False):
+            ev(t, "svc", text)
+            if text.startswith("flag SET: ") and "protection" in text:
+                find("battery-protection", "warn", t,
+                     f"battery reports {text[10:]} (pack {s.get('pack_v')} V, "
+                     f"{s.get('pack_i')} A, top cell #{s.get('max_cell_no')} "
+                     f"{s.get('max_cell')} V)", flag=text[10:])
+            elif text.startswith("flag SET: ") and "alarm" in text:
+                find("battery-alarm", "info", t,
+                     f"battery reports {text[10:]} (top cell "
+                     f"#{s.get('max_cell_no')} {s.get('max_cell')} V, "
+                     f"{s.get('pack_i')} A)", flag=text[10:])
+            elif text == "Charge FET on: OFF":
+                i_before = (prev or {}).get("pack_i")
+                find("battery-opened-charge-switch",
+                     "warn" if (i_before or 0) > 1.0 else "info", t,
+                     f"the battery switched its charge path OFF "
+                     f"(current just before: {i_before} A, top cell "
+                     f"#{s.get('max_cell_no')} {s.get('max_cell')} V)",
+                     pack_i_before=i_before)
+        if (prev is not None and prev.get("balancing") != s.get("balancing")
+                and (last_bal_t is None or t - last_bal_t >= 15.0)):
+            last_bal_t = t
+            ev(t, "svc", f"balancing cells: {s.get('balancing') or 'none'}")
+        for n, v in enumerate(s.get("cells") or [], 1):
+            if v > peaks.get(n, 0):
+                peaks[n] = v
+        flags_seen.update(s.get("flags") or [])
+        modes_seen.update(s.get("mode") or [])
+        if s.get("spread_mv") is not None and (
+                worst_spread is None or s["spread_mv"] > worst_spread["spread_mv"]):
+            worst_spread = {"t_rel": s["t_rel"], "spread_mv": s["spread_mv"],
+                            "max_cell_no": s.get("max_cell_no"),
+                            "min_cell_no": s.get("min_cell_no")}
+        if s.get("max_cell") is not None and (top is None or s["max_cell"] > top["v"]):
+            top = {"t_rel": s["t_rel"], "cell": s.get("max_cell_no"),
+                   "v": s["max_cell"]}
+        prev = s
+    limits = [s["bms_charge_a"] for s in svc if s.get("bms_charge_a") is not None]
+    return {"samples": len(svc),
+            "span_s": round(svc[-1]["t"] - svc[0]["t"], 1),
+            "cell_peak_v": {str(n): v for n, v in sorted(peaks.items())},
+            "highest_cell": top, "worst_spread": worst_spread,
+            "flags_seen": sorted(flags_seen), "modes_seen": sorted(modes_seen),
+            "bms_charge_a_range": [min(limits), max(limits)] if limits else None}
 
 
 class LiveState:
@@ -459,7 +541,32 @@ def export(result: dict, base: Path | str) -> dict:
             w.writerow(r)
     paths["csv"] = str(csv_path)
     json_path = base.with_name(base.stem + ".timeline.json")
-    slim = {k: v for k, v in result.items() if k != "series"}
+    svc = result.get("service_series") or []
+    if svc:
+        ncell = max(len(r.get("cells") or []) for r in svc)
+        cols = (["t", "t_rel", "pack_v", "pack_i", "soc", "bms_charge_a",
+                 "max_cell", "max_cell_no", "min_cell", "min_cell_no", "spread_mv"]
+                + [f"cell{n:02d}" for n in range(1, ncell + 1)]
+                + ["mode", "charge_fet", "discharge_fet", "flags",
+                   "cells_high_alarm", "balancing"])
+        svc_path = base.with_name(base.stem + ".service.csv")
+        with open(svc_path, "w", newline="", encoding="utf-8") as fh:
+            w = csv.DictWriter(fh, fieldnames=cols, extrasaction="ignore")
+            w.writeheader()
+            for r in svc:
+                row = dict(r)
+                for n, v in enumerate(r.get("cells") or [], 1):
+                    row[f"cell{n:02d}"] = v
+                fets = r.get("fets") or {}
+                row.update(mode="+".join(r.get("mode") or []),
+                           charge_fet=fets.get("Charge FET on"),
+                           discharge_fet=fets.get("Discharge FET on"),
+                           flags="; ".join(r.get("flags") or []),
+                           cells_high_alarm=" ".join(map(str, r.get("cells_high_alarm") or [])),
+                           balancing=" ".join(map(str, r.get("balancing") or [])))
+                w.writerow(row)
+        paths["service_csv"] = str(svc_path)
+    slim = {k: v for k, v in result.items() if k not in ("series", "service_series")}
     json_path.write_text(json.dumps(slim, indent=2, ensure_ascii=False, default=str),
                          encoding="utf-8")
     paths["json"] = str(json_path)
@@ -509,6 +616,20 @@ def format_timeline(result: dict, max_events: int = 400) -> str:
              f"  CCL->current delay s: {st.get('ccl_to_current_delay_s')}",
              f"  unanswered: {st['unanswered']}  frame errors: {st['frame_errors']}  "
              f"polling gaps: {len(st['polling_gaps'])}"]
+    sv = st.get("service")
+    if sv:
+        hc, ws = sv.get("highest_cell") or {}, sv.get("worst_spread") or {}
+        lines.append(f"SERVICE SIDE (battery's own data): {sv['samples']} samples "
+                     f"over {sv['span_s']}s")
+        lines.append(f"  highest cell: #{hc.get('cell')} at {hc.get('v')} V "
+                     f"(+{hc.get('t_rel')}s); worst spread {ws.get('spread_mv')} mV "
+                     f"(#{ws.get('max_cell_no')} above #{ws.get('min_cell_no')}, "
+                     f"+{ws.get('t_rel')}s)")
+        lines.append("  cell peaks V: " + " ".join(
+            f"#{n}={v}" for n, v in sv["cell_peak_v"].items()))
+        lines.append(f"  flags seen: {', '.join(sv['flags_seen']) or 'none'}; "
+                     f"modes: {', '.join(sv['modes_seen']) or '-'}; BMS allowed "
+                     f"charge current range: {sv.get('bms_charge_a_range')} A")
     lines.append("FINDINGS:" if result["findings"] else "FINDINGS: none")
     for f in result["findings"]:
         lines.append(f"  [{f['severity'].upper():4}] +{f['t_rel']:9.3f}s {f['kind']}: {f['text']}")

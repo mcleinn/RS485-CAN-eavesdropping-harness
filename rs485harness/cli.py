@@ -358,12 +358,13 @@ def cmd_timeline(args) -> int:
                          current_tolerance_a=args.current_tolerance,
                          response_delay_s=args.response_delay,
                          ccl_factor=args.ccl_factor, current_factor=args.current_factor)
-    result = build_timeline(path, cfg)
+    result = build_timeline(path, cfg, service_path=args.service)
     paths = export(result, path)
     result["exports"] = paths
     human = format_timeline(result) + "\nexports: " + ", ".join(
         f"{k}={v}" for k, v in paths.items())
-    slim = {k: v for k, v in result.items() if k != "series"}
+    slim = {k: v for k, v in result.items()
+            if k not in ("series", "service_series")}
     _print(args, human, slim)
     return 0
 
@@ -413,6 +414,41 @@ def cmd_discover(args) -> int:
     return 0
 
 
+def _service_monitor(port: str, baud: int, device: int, interval: float,
+                     sess, on_event, print_limits: bool):
+    """Open a Seplos service socket and verify it answers. Returns
+    (monitor, link) or (None, link) with the reason already printed."""
+    from .analyzer.seplos_monitor import ServiceMonitor
+    link = _open_serial(port, baud, "svc")
+    mon = ServiceMonitor(link, sess, slave=device, interval_s=interval,
+                         on_event=on_event, print_limits=print_limits)
+    if mon.poll_once() is None:
+        print(f"!! no Seplos service socket on {port} @ {baud} (device "
+              f"{device}). It must be one of the pack's RS485-1/-2 sockets, "
+              f"not the inverter socket and not CAN; `rsh discover --port "
+              f"{port}` tells which kind of socket this is.", flush=True)
+        return None, link
+    return mon, link
+
+
+def cmd_seplos_monitor(args) -> int:
+    sess = S.SessionWriter(args.session or S.new_session_path("seplos-monitor"))
+    mon, link = _service_monitor(args.port, args.baud, args.device,
+                                 args.interval, sess, _echo, True)
+    if mon is None:
+        sess.close()
+        link.close()
+        return 1
+    print(f"monitoring Seplos service socket {args.port} @ {args.baud} every "
+          f"{args.interval}s (read-only); Ctrl+C to stop; session: {sess.path}",
+          flush=True)
+    stats = mon.run(duration=args.duration)
+    _print(args, f"stats: {stats}", {"stats": stats, "session": str(sess.path)})
+    sess.close()
+    link.close()
+    return 0
+
+
 def cmd_seplos_set(args) -> int:
     _arm_deadline(getattr(args, 'max_seconds', None), 'seplos-set')
     from .analyzer.seplos_native import write_setting
@@ -453,13 +489,30 @@ def cmd_sniff(args) -> int:
         links["ch2"] = _open_serial(args.ch2, args.baud, "ch2")
     sn = Sniffer(links, sess, on_event=_quiet if args.json else _echo,
                  markers=not args.no_markers, quiet=args.quiet)
+    mon = svc_link = None
+    if args.service:
+        # Seplos service socket in the same session, on the same clock
+        mon, svc_link = _service_monitor(
+            args.service, args.service_baud, args.service_device,
+            args.service_interval, sess, _quiet if args.json else _echo, False)
+        if mon is None:
+            print("   continuing with the tap only", flush=True)
+        else:
+            mon.start(duration=args.duration)
     print(f"sniffing {', '.join(l.name for l in links.values())} @ "
-          f"{args.baud} baud; Ctrl+C to stop; session: {sess.path}", flush=True)
+          f"{args.baud} baud"
+          + (f" + Seplos service socket {args.service} (read-only)" if mon else "")
+          + f"; Ctrl+C to stop; session: {sess.path}", flush=True)
     stats = sn.run(duration=args.duration)
+    if mon is not None:
+        mon.stop()
+        stats = {**stats, "service": mon.stats}
     _print(args, f"stats: {stats}", {"stats": stats, "session": str(sess.path)})
     sess.close()
     for link in links.values():
         link.close()
+    if svc_link is not None:
+        svc_link.close()
     return 0
 
 
@@ -737,8 +790,30 @@ def build_parser() -> argparse.ArgumentParser:
                    help="no per-frame lines; print only decoded CHANGE lines "
                         "(CCL/CVL/enable/OV-warn/current), a 30s STATE "
                         "heartbeat and your markers - recommended at the bench")
+    p.add_argument("--service", metavar="PORT",
+                   help="also monitor a Seplos BMS 3.0 service socket "
+                        "(RS485-1/-2) on this port, read-only, into the same "
+                        "session: all cell voltages, alarm/protection flags, "
+                        "charge switch, balancing")
+    p.add_argument("--service-baud", type=int, default=19200)
+    p.add_argument("--service-device", type=int, default=0,
+                   help="Modbus device id = pack number - 1 (default 0)")
+    p.add_argument("--service-interval", type=float, default=2.0, help="s")
     common(p)
     p.set_defaults(fn=cmd_sniff)
+
+    p = sub.add_parser("seplos-monitor", help="continuous read-only monitor "
+                                              "on a Seplos BMS 3.0 service "
+                                              "socket (cells, flags, charge "
+                                              "switch, balancing)")
+    p.add_argument("--port", required=True)
+    p.add_argument("--baud", type=int, default=19200)
+    p.add_argument("--device", type=int, default=0,
+                   help="Modbus device id = pack number - 1 (default 0)")
+    p.add_argument("--interval", type=float, default=2.0, help="s between polls")
+    p.add_argument("--duration", type=float)
+    common(p)
+    p.set_defaults(fn=cmd_seplos_monitor)
 
     p = sub.add_parser("timeline", help="charge-control timeline: pairing, decoded "
                                         "series, events, timing, findings, CSV/JSON(/PNG)")
@@ -751,6 +826,10 @@ def build_parser() -> argparse.ArgumentParser:
                    help="scaling override for CCL/DCL (H5), e.g. 0.1")
     p.add_argument("--current-factor", type=float, default=1.0,
                    help="scaling override for pack current (H5)")
+    p.add_argument("--service", metavar="FILE",
+                   help="merge a Seplos service-socket session recorded "
+                        "separately by `rsh seplos-monitor` (not needed when "
+                        "the capture came from `rsh sniff --service`)")
     p.add_argument("--json", action="store_true")
     p.set_defaults(fn=cmd_timeline)
 

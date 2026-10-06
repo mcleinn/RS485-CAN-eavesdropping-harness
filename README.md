@@ -36,6 +36,17 @@ Linux/Raspberry Pi.
   unless `--apply`, hard limits, lower-only unless `--allow-increase`,
   refuses on an implausible read-out, verifies by read-back. Tested only
   against the built-in simulated service socket so far.
+- **Seplos service-side monitor** (`seplos-monitor`, or `sniff --service
+  PORT` to record it together with the inverter-link tap in ONE session on
+  one clock): polls the service socket every 2 s, read-only, and logs all
+  16 cell voltages, which cell is on top and the spread, the battery's own
+  mode (charge / float / full / standby), every alarm and protection flag,
+  per-cell high-voltage alarms, the charge/discharge switch (FET) state,
+  balancing per cell, the BMS-internal allowed charge current, and any
+  change of a setting. Prints only changes plus a 30 s state line.
+  `timeline` merges it: service events in the event log, findings such as
+  "the battery switched its charge path OFF (current just before: X A)",
+  per-cell peaks, and a `<session>.service.csv` with one column per cell.
 - **Scripting** (`send` / `script`): send arbitrary single frames, or run
   JSON scenarios — a proactive master send/branch sequence, or reactive
   "if it writes X, answer Y" responder rules. The LLM-drivable "hand me the
