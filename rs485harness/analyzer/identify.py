@@ -215,6 +215,18 @@ def identify(link: Link, session: SessionWriter, chan: str = "id",
 
     # ---- Phase 2: active interrogation
     if active:
+        heard_master = any(v.get("pylontech") for v in report["passive"].values())
+        if heard_master:
+            # an inverter is polling on this bus: we must not become a second
+            # master (collisions; the battery would answer OUR probes)
+            msg = ("another master is polling this bus - skipping active "
+                   "probes. Use --passive-only here, or probe the battery with "
+                   "the inverter switched off / its RS485 unplugged.")
+            report["verdicts"].append("ACTIVE PROBING SKIPPED: " + msg)
+            session.note("identify: active phase skipped, master present", chan)
+            on_event("!! " + msg)
+            active = False
+    if active:
         pylontech_probes = []
         for baud in baud_list:
             if baud:
