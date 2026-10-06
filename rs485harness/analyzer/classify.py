@@ -21,6 +21,10 @@ def crc16_modbus(data: bytes) -> int:
     return crc
 
 
+MODBUS_EXCEPTIONS = {1: "ILLEGAL FUNCTION", 2: "ILLEGAL DATA ADDRESS",
+                     3: "ILLEGAL DATA VALUE", 4: "SLAVE DEVICE FAILURE",
+                     6: "SLAVE DEVICE BUSY"}
+
 # Known BMS register maps -> which device/setting a Modbus poll points at
 KNOWN_REGISTER_MAPS = (
     (0x0000, 0x00FF, "voltronic-lib",
@@ -55,6 +59,12 @@ def find_modbus_frames(data: bytes) -> list[dict]:
                     0x03, 0x04, 0x06, 0x10, 0x83, 0x84, 0x90):
                 found = {"offset": i, "length": length, "slave": frame[0],
                          "function": frame[1], "hex": frame.hex().upper()}
+                if frame[1] & 0x80 and length == 5:
+                    # Modbus exception response: fn|0x80, exception code
+                    found["exception"] = frame[2]
+                    found["exception_name"] = MODBUS_EXCEPTIONS.get(
+                        frame[2], f"exception 0x{frame[2]:02X}")
+                    found["for_function"] = frame[1] & 0x7F
                 if length == 8 and frame[1] in (0x03, 0x04, 0x06, 0x10):
                     # request-shaped: slave, func, start hi/lo, count hi/lo
                     start = (frame[2] << 8) | frame[3]

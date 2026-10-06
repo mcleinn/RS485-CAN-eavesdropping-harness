@@ -114,8 +114,8 @@ def _probe_pylontech(link: Link, ver: int, adr: int, cid2: int,
 
 def _probe_modbus(link: Link, slave: int, start: int, count: int,
                   timeout: float = 0.5, session: SessionWriter | None = None,
-                  chan: str = "id", tag: str = ""):
-    pdu = bytes([slave, 0x03, start >> 8, start & 0xFF, count >> 8, count & 0xFF])
+                  chan: str = "id", tag: str = "", function: int = 0x03):
+    pdu = bytes([slave, function, start >> 8, start & 0xFF, count >> 8, count & 0xFF])
     crc = crc16_modbus(pdu)
     req = pdu + bytes([crc & 0xFF, crc >> 8])
     link.flush_input()
@@ -260,17 +260,22 @@ def identify(link: Link, session: SessionWriter, chan: str = "id",
             # Voltronic spec: common node id 0x01 (every BMS must answer it);
             # unique id is 0x0F when the ID switch is at 0. 0x0010 = cell
             # count, always implemented - the most reliable battery probe.
-            for slave, start, count, tag in ((1, 0x0010, 4, "voltronic-LIB-cells"),
-                                             (1, 0x0000, 4, "voltronic-LIB"),
-                                             (0x0F, 0x0010, 4, "voltronic-LIB-id0F"),
-                                             (0, 0x1000, 4, "seplos-v3-PIA"),
-                                             (1, 0x1000, 4, "seplos-v3-PIA")):
+            for slave, start, count, tag, fn in (
+                    (1, 0x0010, 4, "voltronic-LIB-cells", 0x03),
+                    (1, 0x0010, 4, "voltronic-LIB-cells-fn04", 0x04),
+                    (1, 0x0000, 4, "voltronic-LIB", 0x03),
+                    (0x0F, 0x0010, 4, "voltronic-LIB-id0F", 0x03),
+                    (0, 0x1000, 4, "seplos-v3-PIA", 0x03),
+                    (1, 0x1000, 4, "seplos-v3-PIA", 0x03)):
                 hit, lat, req = _probe_modbus(link, slave, start, count,
                                               session=session, chan=chan,
-                                              tag=tag)
+                                              tag=tag, function=fn)
                 entry = {"protocol": "modbus", "baud": label, "slave": slave,
-                         "start": f"{start:04X}", "probe": tag,
+                         "start": f"{start:04X}", "probe": tag, "function": fn,
                          "answered": hit is not None}
+                if hit and hit.get("exception") is not None:
+                    entry["exception"] = hit["exception"]
+                    entry["exception_name"] = hit["exception_name"]
                 if hit:
                     entry.update({"latency_ms": lat, "response": hit})
                     words = _modbus_response_words(hit)
@@ -307,6 +312,17 @@ def identify(link: Link, session: SessionWriter, chan: str = "id",
                     pass
         modbus_hits = [e for e in report["active"]
                        if e["protocol"] == "modbus" and e["answered"]]
+        exc_only = [e for e in modbus_hits if e.get("exception") is not None]
+        if exc_only and len(exc_only) == len(modbus_hits):
+            codes = sorted({f"fn 0x{e['function']:02X} -> {e['exception_name']}"
+                            for e in exc_only})
+            report["verdicts"].append(
+                f"RESPONDER: Modbus RTU device @ {exc_only[0]['baud']} baud "
+                f"slave {exc_only[0]['slave']} answers only with EXCEPTIONS "
+                f"({'; '.join(codes)}) - it is a live Modbus slave but does "
+                f"not serve these functions/registers; the protocol it "
+                f"implements is not the probed map.")
+        modbus_hits = [e for e in modbus_hits if e.get("exception") is None]
         for e in modbus_hits:
             regs = e.get("registers")
             extra = ""

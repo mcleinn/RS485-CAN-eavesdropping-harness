@@ -271,6 +271,18 @@ COM6, **9600 8N1**):
   no alarms. (÷10 current scaling — cross-check 160 A against the Seplos
   app's charge-current limit = the H5 unit check.)
 
+### Seplos "RS485-Voltronic" mode (measured 2026-10-06, inverter off)
+- Becomes a **Modbus RTU slave, ID 1, 9600 8N1** (so Voltronic mode ≠
+  Pylontech-ASCII, confirming the spec); no response at 19200/115200.
+- **Function 0x03 → exception 0x01 ILLEGAL FUNCTION at every address**
+  tried (0x0000, 0x0001, 0x0010, 0x0070, 0x1000); **function 0x04 →
+  silence**. I.e. it does not serve the Voltronic register map by plain
+  reads; whatever a real Voltronic inverter sends (possibly a 0x10 write/
+  handshake first) is unknown — would need a capture of a genuine
+  Voltronic↔Seplos link. Not pursued; the SAKO is on PHY/PYL anyway.
+- Captures: `captures/taper/seplos-voltronic-mode-identify.jsonl`,
+  `seplos-voltronic-mode-discover.jsonl` (+ reports).
+
 ## Real-device validation — Pylontech US5000C stack (2026-09-24)
 
 Verified on a 4-pack US5000C rack (fw 2.3) via the master's **B/RS485**

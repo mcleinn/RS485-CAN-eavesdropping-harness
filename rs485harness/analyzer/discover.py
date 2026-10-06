@@ -211,21 +211,34 @@ def _modbus_discovery(link: Link, session: SessionWriter, chan: str,
     blocks: dict[int, list[int]] = {}
     read: dict = {}
     for start, count, tag in VOLTRONIC_BLOCKS:
-        hit, lat, _req = _probe_modbus(link, slave, start, count,
-                                       timeout=0.8, session=session,
-                                       chan=chan, tag=f"discover-{tag}")
-        if hit:
+        done = False
+        for fn in (0x03, 0x04):
+            hit, lat, _req = _probe_modbus(link, slave, start, count,
+                                           timeout=0.8, session=session,
+                                           chan=chan, tag=f"discover-{tag}",
+                                           function=fn)
+            if not hit:
+                continue
+            if hit.get("exception") is not None:
+                read[tag] = {"start": f"{start:04X}", "count": count,
+                             "function": fn, "status":
+                             f"exception {hit['exception']} ({hit['exception_name']})"}
+                on_event(f"  block {tag} @0x{start:04X} fn 0x{fn:02X}: "
+                         f"{hit['exception_name']}")
+                continue       # try the next function code
             words = _modbus_response_words(hit)
             if words:
                 blocks[start] = words
                 read[tag] = {"start": f"{start:04X}", "count": count,
-                             "latency_ms": lat, "words": words}
-                on_event(f"  block {tag} @0x{start:04X}: {len(words)} regs "
-                         f"in {lat}ms")
-                continue
-        read[tag] = {"start": f"{start:04X}", "count": count,
-                     "status": "no answer"}
-        on_event(f"  block {tag} @0x{start:04X}: no answer")
+                             "function": fn, "latency_ms": lat, "words": words}
+                on_event(f"  block {tag} @0x{start:04X} fn 0x{fn:02X}: "
+                         f"{len(words)} regs in {lat}ms")
+                done = True
+                break
+        if not done and tag not in read:
+            read[tag] = {"start": f"{start:04X}", "count": count,
+                         "status": "no answer"}
+            on_event(f"  block {tag} @0x{start:04X}: no answer")
     return {"slave": slave, "blocks": read,
             "decoded": _decode_voltronic_registers(blocks)}
 
