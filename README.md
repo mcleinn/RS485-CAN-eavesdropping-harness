@@ -26,6 +26,16 @@ Linux/Raspberry Pi.
   payloads decoded into a state snapshot, dialect quirks flagged; Modbus
   register blocks read and decoded for LIB-mode batteries. Reports persist
   as JSON for diffing across settings/firmware changes.
+- **Seplos BMS 3.0 service socket** (RS485-1/-2, native Modbus @ 19200):
+  `identify`/`discover` recognise it by themselves (discover also tries the
+  other baud when nothing answers) and say which kind of socket the
+  adapter is on. `discover` then prints pack state, all 16 cell voltages
+  and all 106 settings by number and name (e.g. 102 Charging request
+  voltage). Read-only. `seplos-set` is an EXPERIMENTAL guarded write for
+  the two charge-request settings only (102 voltage, 103 current): dry run
+  unless `--apply`, hard limits, lower-only unless `--allow-increase`,
+  refuses on an implausible read-out, verifies by read-back. Tested only
+  against the built-in simulated service socket so far.
 - **Scripting** (`send` / `script`): send arbitrary single frames, or run
   JSON scenarios — a proactive master send/branch sequence, or reactive
   "if it writes X, answer Y" responder rules. The LLM-drivable "hand me the

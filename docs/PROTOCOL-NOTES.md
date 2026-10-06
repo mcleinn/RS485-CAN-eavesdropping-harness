@@ -136,6 +136,21 @@ coils), SPA 0x1300 (settings), SFA 0x1400, SCA 0x150D. Full map:
 Use the RS485-1/RS485-2 socket for this — those ports never talk to
 inverters.
 
+Per the Seplos protocol PDF the BMS serves only function **0x04** (read
+registers), 0x01 (read coils), 0x10 and 0x0F (writes) - **not 0x03**. Until
+2026-10-06 our identify probed this map with 0x03 only and discover knew
+only the Voltronic blocks, so the service socket would not have been found;
+both now use 0x04 (`rs485harness/analyzer/seplos_native.py`). Device id =
+pack number - 1. The SPA block (0x1300, 106 registers) is the settings list
+shown in BMS Studio, same order and numbering: 102 = Charging request
+voltage (0x1365, 0.01 V), 103 = Charging request current (0x1366, A),
+104 = Discharge request current, 105 = Pcs protocol; 11-14 cell
+high-voltage recovery/alarm and over-voltage recovery/protection; 3-6 the
+same for the pack; 41-43 float-charge lock/release; 80-83 equalization.
+Temperatures are sent in 0.1 K. The map is validated against the example
+read-out in the register spreadsheet (57.60 V / 180 A at 102/103), not yet
+against this pack.
+
 ## Field findings from forum threads (docs/refs/threads/, mined 2026-09-22)
 
 Real captures and hard-won experience — several are decisive:

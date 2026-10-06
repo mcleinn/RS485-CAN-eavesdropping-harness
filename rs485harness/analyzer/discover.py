@@ -23,6 +23,8 @@ from ..core.session import SessionWriter
 from ..protocols.pylontech import frames as F
 from ..protocols.pylontech import payloads as P
 from .identify import _probe_pylontech, _probe_modbus, _modbus_response_words
+from .seplos_native import (read_registers, seplos_native_discovery,
+                            format_seplos_native)
 
 # (cid2, info-style): "pack" = pack-number byte expected in INFO
 PYLONTECH_SWEEP = [
@@ -246,6 +248,14 @@ def _modbus_discovery(link: Link, session: SessionWriter, chan: str,
 def _find_responder(link: Link, session: SessionWriter, chan: str,
                     on_event) -> dict | None:
     """Quick scan (current baud only) for something to discover."""
+    # Seplos BMS 3.0 service socket first: two short reads, and it only
+    # answers function 0x04 (the generic Modbus probes below use 0x03).
+    for slave in (0, 1):
+        words, _info = read_registers(link, slave, 0x1000, 4, timeout=0.3,
+                                      session=session, chan=chan,
+                                      tag="discover-scan")
+        if words is not None:
+            return {"protocol": "seplos-native", "slave": slave}
     for adr in (2, 0x12, 1, 0):
         for ver in (0x20, 0x25):
             pf, _lat = _probe_pylontech(link, ver, adr, 0x61, "",
@@ -279,6 +289,19 @@ def discover(link: Link, session: SessionWriter, chan: str = "disc",
     else:
         on_event("scanning for a responder (current baud) ...")
         responder = _find_responder(link, session, chan, on_event)
+        if responder is None:
+            # nothing at this baud: the other kind of socket uses the other
+            # speed (inverter socket 9600, Seplos service socket 19200)
+            for baud in (19200, 9600):
+                if baud == getattr(link, "baud", None):
+                    continue
+                on_event(f"nothing at {report['baud']} baud - trying {baud} ...")
+                link.set_baud(baud)
+                responder = _find_responder(link, session, chan, on_event)
+                if responder is not None:
+                    report["baud_tried_first"] = report["baud"]
+                    report["baud"] = baud
+                    break
     if responder is None:
         report["result"] = ("no responder found at the current baud - run "
                             "`rsh identify` first to find baud/protocol, "
@@ -294,6 +317,9 @@ def discover(link: Link, session: SessionWriter, chan: str = "disc",
         result = _pylontech_discovery(link, session, chan,
                                       responder["adr"], responder["ver"],
                                       on_event)
+    elif responder["protocol"] == "seplos-native":
+        result = seplos_native_discovery(link, session, chan,
+                                         responder["slave"], on_event)
     else:
         result = _modbus_discovery(link, session, chan, responder["slave"],
                                    on_event)
@@ -307,8 +333,18 @@ def format_discovery(report: dict) -> str:
     lines = ["DISCOVERY REPORT"]
     if "result" in report:
         return "\n".join(lines + [f"  {report['result']}"])
-    lines.append(f"  responder: {report['responder']}")
+    lines.append(f"  responder: {report['responder']} @ {report.get('baud')} baud")
+    if "seplos_native" in report:
+        lines.append("  socket: Seplos SERVICE socket (RS485-1/-2, native "
+                     "Modbus) - settings are readable here. The inverter "
+                     "does not plug in here.")
+        lines += format_seplos_native(report)
     if "commands" in report:
+        if "47" in report.get("ok_empty", []):
+            lines.append("  socket: INVERTER-protocol socket - no settings "
+                         "are served here (0x47 answers empty). A Seplos BMS "
+                         "3.0 serves them on its RS485-1/-2 service sockets "
+                         "(19200 baud).")
         lines.append(f"  with data:   {', '.join(report['supported']) or '-'}")
         if report.get("ok_empty"):
             lines.append(f"  ok, empty:   {', '.join(report['ok_empty'])}  "

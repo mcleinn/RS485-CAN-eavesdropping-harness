@@ -265,6 +265,8 @@ def identify(link: Link, session: SessionWriter, chan: str = "id",
                     (1, 0x0010, 4, "voltronic-LIB-cells-fn04", 0x04),
                     (1, 0x0000, 4, "voltronic-LIB", 0x03),
                     (0x0F, 0x0010, 4, "voltronic-LIB-id0F", 0x03),
+                    (0, 0x1000, 4, "seplos-v3-PIA-fn04", 0x04),
+                    (1, 0x1000, 4, "seplos-v3-PIA-fn04", 0x04),
                     (0, 0x1000, 4, "seplos-v3-PIA", 0x03),
                     (1, 0x1000, 4, "seplos-v3-PIA", 0x03)):
                 hit, lat, req = _probe_modbus(link, slave, start, count,
@@ -334,6 +336,15 @@ def identify(link: Link, session: SessionWriter, chan: str = "id",
                          f"inverter to LIB; if the inverter polls "
                          f"Pylontech-ASCII instead, switch the battery back "
                          f"to PYLON.")
+            if regs and e["probe"].startswith("seplos-v3"):
+                report["verdicts"].append(
+                    f"RESPONDER: Seplos BMS 3.0 SERVICE socket (native "
+                    f"Modbus) @ {e['baud']} baud, device {e['slave']} - "
+                    f"settings and cell data are readable here: "
+                    f"`rsh discover --port <COM> --baud {e['baud']}`. This "
+                    f"is not the inverter socket (that one answers "
+                    f"Pylontech-ASCII at 9600).")
+                continue
             report["verdicts"].append(
                 f"RESPONDER: Modbus RTU device @ {e['baud']} baud slave "
                 f"{e['slave']} ({e['probe']}"

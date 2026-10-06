@@ -413,6 +413,37 @@ def cmd_discover(args) -> int:
     return 0
 
 
+def cmd_seplos_set(args) -> int:
+    _arm_deadline(getattr(args, 'max_seconds', None), 'seplos-set')
+    from .analyzer.seplos_native import write_setting
+    sess = S.SessionWriter(args.session or S.new_session_path("seplos-set"))
+    link = _open_serial(args.port, args.baud, "svc")
+    print(f"Seplos service socket {args.port} @ {args.baud}, device "
+          f"{args.device}: " + ("APPLYING the change" if args.apply else
+                                "dry run (nothing is written; add --apply)"),
+          flush=True)
+    report = write_setting(link, sess, "svc", args.device, args.setting,
+                           args.value, apply=args.apply,
+                           allow_increase=args.allow_increase,
+                           on_event=_quiet if args.json else _echo)
+    report["session"] = str(sess.path)
+    human = [f"result: {report['result']}"]
+    if "before" in report:
+        human.append(f"  {report['setting']} {report['name']}: before "
+                     f"{report['before']} {report['unit']}"
+                     + (f", after {report['after']} {report['unit']}"
+                        if "after" in report else ""))
+    if report["result"] == "dry-run":
+        human.append(f"  would send: {report['frame_hex']}")
+    if report["result"] == "written" and "restore" in report:
+        human.append(f"  to undo: rsh {report['restore']} --port {args.port}")
+    human.append(f"session: {sess.path}")
+    _print(args, "\n".join(human), report)
+    sess.close()
+    link.close()
+    return 0 if report["result"] in ("written", "dry-run", "unchanged") else 1
+
+
 def cmd_sniff(args) -> int:
     from .analyzer.sniff import Sniffer
     sess = S.SessionWriter(args.session or S.new_session_path("sniff"))
@@ -674,6 +705,26 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ver", help="protocol version byte, hex (default 20)")
     common(p)
     p.set_defaults(fn=cmd_discover)
+
+    p = sub.add_parser("seplos-set", help="EXPERIMENTAL: change one charge-"
+                                          "request setting on a Seplos BMS "
+                                          "3.0 service socket (dry run "
+                                          "unless --apply)")
+    p.add_argument("--port", required=True)
+    p.add_argument("--baud", type=int, default=19200)
+    p.add_argument("--device", type=int, default=0,
+                   help="Modbus device id = pack number - 1 (default 0)")
+    p.add_argument("--setting", type=int, required=True,
+                   help="102 = Charging request voltage (V), "
+                        "103 = Charging request current (A)")
+    p.add_argument("--value", type=float, required=True)
+    p.add_argument("--apply", action="store_true",
+                   help="really write; without it only the reads happen")
+    p.add_argument("--allow-increase", action="store_true",
+                   help="permit a value higher than the present one "
+                        "(needed to restore the old value)")
+    common(p)
+    p.set_defaults(fn=cmd_seplos_set)
 
     p = sub.add_parser("sniff", help="passive capture (tap) on one or two channels")
     p.add_argument("--ch1", required=True)
