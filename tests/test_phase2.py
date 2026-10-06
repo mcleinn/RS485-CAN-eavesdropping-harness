@@ -138,6 +138,35 @@ def test_bridge_modify_failsafe_forwards_original(tmp_path):
     assert not any(r.get("modified") for r in recs)
 
 
+def test_bridge_warns_when_ports_are_swapped(tmp_path):
+    """Inverter wired to the channel configured as 'battery' -> the bridge
+    must warn (once) and note it in the session; forwarding still works."""
+    va = VirtualAnalyzer()
+    inv_end = va.bus1.end("inverter"); bat_end = va.bus2.end("battery")
+    sess = SessionWriter(tmp_path / "swap.jsonl")
+    prof = DialectProfile(**{**BATTERY_PROFILES["ideal-pylontech"].to_dict(),
+                             "response_delay_s": 0.0})
+    bat = BatterySimulator(bat_end, preset("ideal"), prof, sess, chan="bat")
+    ip = InverterPollProfile(**{**INVERTER_PROFILES["voltronic-6x"].to_dict(),
+                                "period_s": 0.05, "response_timeout_s": 0.5})
+    inv = InverterSimulator(inv_end, ip, sess, chan="inv")
+    events = []
+    # roles deliberately inverted relative to the wiring
+    br = Bridge(va.ch1, va.ch2, sess, role_a="battery", role_b="inverter",
+                markers=False, on_event=events.append)
+    bat.start()
+    bt = threading.Thread(target=br.run, daemon=True); bt.start()
+    ok = 0
+    for _ in range(6):
+        if inv.poll_once(0x61)["status"] == "response":
+            ok += 1
+    br.stop(); bt.join(timeout=3); bat.stop(); sess.close()
+    assert ok > 0                                           # still forwards
+    assert any("ROLE MISMATCH" in e for e in events)
+    assert sum("ROLE MISMATCH" in e for e in events) == 1   # warned once
+    assert any(r.get("role_mismatch") for r in read_session(tmp_path / "swap.jsonl"))
+
+
 def test_bridge_transparent_is_byte_level():
     """A partial frame (no CR yet) must cross a transparent bridge
     immediately - no store-and-forward."""

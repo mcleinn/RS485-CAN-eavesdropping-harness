@@ -58,6 +58,8 @@ class Bridge:
         self.stats = {chan: {"frames": 0, "raw_bytes": 0, "rewritten": 0,
                              "errors": 0, "gaps": 0} for chan in self.ends}
         self._last_frame_t: dict[str, float] = {}
+        self._role_counts = {chan: {"req": 0, "resp": 0} for chan in self.ends}
+        self._role_warned = False
         if translator is not None:
             # tell the translator which direction is BMS -> inverter
             bms_chan = chan_a if role_a == "battery" else chan_b
@@ -65,6 +67,27 @@ class Bridge:
 
     def _flow(self, src_chan: str) -> str:
         return ROLE_FLOW.get(self.roles[src_chan], f"{src_chan}->{self.other[src_chan]}")
+
+    def _check_roles(self, src_chan: str, pf: F.ParsedFrame) -> None:
+        """Warn once if the traffic contradicts the configured roles, i.e.
+        requests arrive on the 'battery' side - the COM ports are swapped."""
+        if self._role_warned or pf.cid2 is None:
+            return
+        is_req = pf.cid2 in F.CID2_NAMES and len(pf.info) <= 4
+        c = self._role_counts[src_chan]
+        c["req" if is_req else "resp"] += 1
+        role = self.roles[src_chan]
+        wrong = ((role == "battery" and c["req"] >= 3 and c["resp"] == 0) or
+                 (role == "inverter" and c["resp"] >= 3 and c["req"] == 0))
+        if wrong:
+            self._role_warned = True
+            msg = (f"!! ROLE MISMATCH: {src_chan} is configured as {role} but "
+                   f"carries {'requests' if role == 'battery' else 'responses'} - "
+                   f"the COM ports are swapped. Stop (Ctrl+C) and swap --ch1/--ch2 "
+                   f"(keep the roles). Transparent forwarding is unaffected, but "
+                   f"flow labels - and any policy direction - would be inverted.")
+            self.on_event(msg)
+            self.session.note(msg, src_chan, mode=self.mode, role_mismatch=True)
 
     def _note_gap(self, src_chan: str, now: float) -> None:
         last = self._last_frame_t.get(src_chan)
@@ -93,6 +116,7 @@ class Bridge:
                 if ev.kind == "frame":
                     pf = F.parse_frame(ev.data)
                     self._note_gap(src_chan, ev.ts)
+                    self._check_roles(src_chan, pf)
                     self.stats[src_chan]["frames"] += 1
                     if pf.errors:
                         self.stats[src_chan]["errors"] += 1
@@ -131,6 +155,7 @@ class Bridge:
                     continue
                 pf = F.parse_frame(ev.data)
                 self._note_gap(src_chan, ev.ts)
+                self._check_roles(src_chan, pf)
                 self.stats[src_chan]["frames"] += 1
                 if pf.errors:
                     self.stats[src_chan]["errors"] += 1
