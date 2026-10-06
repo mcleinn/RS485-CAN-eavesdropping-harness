@@ -167,6 +167,43 @@ def test_bridge_warns_when_ports_are_swapped(tmp_path):
     assert any(r.get("role_mismatch") for r in read_session(tmp_path / "swap.jsonl"))
 
 
+def test_bridge_liveness_guard_reopens_after_silent_stall(tmp_path):
+    """Real-hardware failure mode: adapter stays enumerated but goes deaf.
+    Once traffic has flowed, silence on both channels must trigger a
+    (rate-limited) reopen - and forwarding must still work afterwards."""
+    va = VirtualAnalyzer()
+    inv_end = va.bus1.end("inverter"); bat_end = va.bus2.end("battery")
+    sess = SessionWriter(tmp_path / "stall.jsonl")
+    events = []
+    br = Bridge(va.ch1, va.ch2, sess, markers=False, on_event=events.append,
+                stall_reopen_s=0.4)
+    bt = threading.Thread(target=br.run, daemon=True); bt.start()
+    time.sleep(0.1)
+    frame = F.encode_frame(0x20, 0x12, 0x46, 0x61, "12")
+    inv_end.write(frame)
+    assert bat_end.read(timeout=0.5).data == frame       # traffic flowed
+    time.sleep(1.3)                                       # ... then silence
+    assert any("silent adapter stall" in e for e in events)
+    assert sum("silent adapter stall" in e for e in events) == 1   # rate-limited
+    inv_end.write(frame)                                  # still forwarding
+    assert bat_end.read(timeout=0.5).data == frame
+    br.stop(); bt.join(timeout=2); sess.close()
+    recs = list(read_session(tmp_path / "stall.jsonl"))
+    assert any(r.get("stall_reopen") for r in recs)
+
+
+def test_bridge_no_stall_reopen_before_any_traffic(tmp_path):
+    va = VirtualAnalyzer()
+    sess = SessionWriter(tmp_path / "quiet.jsonl")
+    events = []
+    br = Bridge(va.ch1, va.ch2, sess, markers=False, on_event=events.append,
+                stall_reopen_s=0.2)
+    bt = threading.Thread(target=br.run, daemon=True); bt.start()
+    time.sleep(0.9)
+    br.stop(); bt.join(timeout=2); sess.close()
+    assert not any("silent adapter stall" in e for e in events)
+
+
 def test_bridge_transparent_is_byte_level():
     """A partial frame (no CR yet) must cross a transparent bridge
     immediately - no store-and-forward."""

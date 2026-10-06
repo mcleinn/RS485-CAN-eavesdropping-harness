@@ -72,7 +72,33 @@ class SerialLink(Link):
 
     @property
     def baud(self) -> int:
-        return self.ser.baudrate
+        try:
+            return self.ser.baudrate
+        except Exception:
+            return getattr(self, "_last_baud", 0)
+
+    def reopen(self) -> bool:
+        """Re-create the port after a USB re-enumeration ('Access is denied',
+        'ClearCommError failed'). Returns True on success."""
+        baud = getattr(self, "_last_baud", None) or 9600
+        try:
+            baud = self.ser.baudrate or baud
+        except Exception:
+            pass
+        self._last_baud = baud
+        try:
+            self.ser.close()
+        except Exception:
+            pass
+        try:
+            self.ser = self._serial_mod.Serial(
+                self.port, baud, bytesize=8, parity="N", stopbits=1,
+                timeout=0.05, write_timeout=1.0,
+                rtscts=False, dsrdtr=False, xonxoff=False)
+            self._pushback = b""
+            return True
+        except Exception:
+            return False
 
     def read(self, timeout: float = 0.05) -> Chunk | None:
         if self._pushback:

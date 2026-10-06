@@ -36,13 +36,27 @@ from .timeline import LiveState
 ROLE_FLOW = {"inverter": "INV->BMS", "battery": "BMS->INV"}
 
 
+class SilentStall(Exception):
+    """Raised inside a pump to route a liveness-triggered reopen through the
+    normal serial-error recovery path."""
+
+
 class Bridge:
     def __init__(self, link_a: Link, link_b: Link, session: SessionWriter,
                  chan_a: str = "ch1", chan_b: str = "ch2",
                  translator: Translator | None = None, on_event=None,
                  role_a: str = "inverter", role_b: str = "battery",
                  markers: bool = True, gap_note_s: float = 3.0,
-                 quiet: bool = False, heartbeat_s: float = 30.0):
+                 quiet: bool = False, heartbeat_s: float = 30.0,
+                 stall_reopen_s: float = 6.0):
+        # liveness guard: once traffic has been seen, total silence on BOTH
+        # channels for stall_reopen_s means the adapter/driver went deaf
+        # (seen on real hardware: device still enumerated, no bytes for 55s
+        # until Windows finally errored). Reopen the ports proactively.
+        self.stall_reopen_s = stall_reopen_s
+        self._last_rx_t: dict[str, float | None] = {chan_a: None, chan_b: None}
+        self._force_reopen: set[str] = set()
+        self._last_forced = 0.0
         self.ends = {chan_a: link_a, chan_b: link_b}
         self.other = {chan_a: chan_b, chan_b: chan_a}
         self.roles = {chan_a: role_a, chan_b: role_b}
@@ -98,15 +112,79 @@ class Bridge:
                               src_chan, flow=self._flow(src_chan), mode=self.mode)
         self._last_frame_t[src_chan] = now
 
+    # ------------------------------------------------------------ liveness
+
+    def _check_liveness(self) -> None:
+        """Called twice a second from run(). If bytes were flowing and both
+        channels have now been silent for stall_reopen_s, ask each pump to
+        reopen its port (rate-limited so a genuinely quiet bus is not
+        hammered)."""
+        if self.stall_reopen_s <= 0:
+            return
+        seen = [t for t in self._last_rx_t.values() if t is not None]
+        if not seen:
+            return                      # never saw traffic: nothing to protect
+        now = time.perf_counter()
+        silent = now - max(seen)
+        if silent > self.stall_reopen_s and \
+                now - self._last_forced > max(15.0, 2 * self.stall_reopen_s):
+            self._last_forced = now
+            msg = (f"no bytes on either channel for {silent:.1f}s although "
+                   f"traffic was flowing - suspected silent adapter stall; "
+                   f"reopening both ports")
+            self.on_event("!! " + msg)
+            self.session.note(msg, mode=self.mode, stall_reopen=True)
+            self._force_reopen.update(self.ends)
+
+    def _liveness_gate(self, src_chan: str) -> None:
+        if src_chan in self._force_reopen:
+            self._force_reopen.discard(src_chan)
+            raise SilentStall(f"liveness guard: forced reopen of {src_chan}")
+
     # ------------------------------------------------------------ pumps
 
+    def _recover(self, chan: str, err: Exception) -> bool:
+        """A pump hit a serial error (typically the adapter re-enumerated
+        while wiring was touched). Log it, then keep trying to reopen the
+        port until it comes back or we are told to stop. Returns False if
+        stopping."""
+        link = self.ends[chan]
+        msg = f"serial error on {chan} ({link.name}): {err!r} - reopening"
+        self.on_event("!! " + msg)
+        self.session.note(msg, chan, mode=self.mode, serial_error=True)
+        self.stats[chan]["errors"] += 1
+        if not hasattr(link, "reopen"):
+            return True         # virtual/loopback links: nothing to reopen
+        attempts = 0
+        while not self.stop_event.is_set():
+            attempts += 1
+            if hasattr(link, "reopen") and link.reopen():
+                self.on_event(f"   {chan} ({link.name}) reopened after {attempts} attempt(s)")
+                self.session.note(f"{chan} reopened after {attempts} attempt(s)", chan,
+                                  mode=self.mode)
+                return True
+            self.stop_event.wait(1.0)
+        return False
+
+
     def _pump_transparent(self, src_chan: str) -> None:
+        while not self.stop_event.is_set():
+            try:
+                self._pump_transparent_inner(src_chan)
+                return
+            except Exception as e:  # serial.SerialException, OSError, ...
+                if not self._recover(src_chan, e):
+                    return
+
+    def _pump_transparent_inner(self, src_chan: str) -> None:
         src, dst = self.ends[src_chan], self.ends[self.other[src_chan]]
         flow = self._flow(src_chan)
         acc = FrameAccumulator(gap_flush_s=0.05)
         while not self.stop_event.is_set():
+            self._liveness_gate(src_chan)
             chunk = src.read(timeout=0.05)
             if chunk:
+                self._last_rx_t[src_chan] = chunk.ts
                 dst.write(chunk.data)          # byte-level, immediately
             events = acc.feed(chunk) if chunk else []
             stale = acc.flush_if_stale(time.perf_counter())
@@ -136,12 +214,24 @@ class Bridge:
                         self.on_event(f"[{flow}] raw {len(ev.data)}B forwarded")
 
     def _pump_modify(self, src_chan: str) -> None:
+        while not self.stop_event.is_set():
+            try:
+                self._pump_modify_inner(src_chan)
+                return
+            except Exception as e:
+                if not self._recover(src_chan, e):
+                    return
+
+    def _pump_modify_inner(self, src_chan: str) -> None:
         src, dst = self.ends[src_chan], self.ends[self.other[src_chan]]
         direction = f"{src_chan}->{self.other[src_chan]}"
         flow = self._flow(src_chan)
         acc = FrameAccumulator(gap_flush_s=0.05)
         while not self.stop_event.is_set():
+            self._liveness_gate(src_chan)
             chunk = src.read(timeout=0.05)
+            if chunk:
+                self._last_rx_t[src_chan] = chunk.ts
             events = acc.feed(chunk) if chunk else []
             stale = acc.flush_if_stale(time.perf_counter())
             if stale:
@@ -213,13 +303,13 @@ class Bridge:
                                     name=f"bridge-{chan}") for chan in self.ends]
         for t in threads:
             t.start()
+        started = time.monotonic()
         try:
-            if duration:
-                self.stop_event.wait(duration)
-                self.stop_event.set()
-            else:
-                while not self.stop_event.wait(0.5):
-                    pass
+            while not self.stop_event.wait(0.5):
+                if duration and time.monotonic() - started >= duration:
+                    self.stop_event.set()
+                    break
+                self._check_liveness()
         except KeyboardInterrupt:
             self.stop_event.set()
         for t in threads:

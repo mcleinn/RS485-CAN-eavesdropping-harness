@@ -36,6 +36,24 @@ class Sniffer:
         self._threads: list[threading.Thread] = []
 
     def _watch(self, chan: str, link: Link) -> None:
+        while not self.stop_event.is_set():
+            try:
+                self._watch_inner(chan, link)
+                return
+            except Exception as e:  # adapter re-enumerated etc.
+                msg = f"serial error on {chan} ({link.name}): {e!r} - reopening"
+                self.on_event("!! " + msg)
+                self.session.note(msg, chan, mode="tap", serial_error=True)
+                n = 0
+                while not self.stop_event.is_set():
+                    n += 1
+                    if hasattr(link, "reopen") and link.reopen():
+                        self.on_event(f"   {chan} reopened after {n} attempt(s)")
+                        self.session.note(f"{chan} reopened after {n} attempt(s)", chan)
+                        break
+                    self.stop_event.wait(1.0)
+
+    def _watch_inner(self, chan: str, link: Link) -> None:
         acc = FrameAccumulator()
         while not self.stop_event.is_set():
             chunk = link.read(timeout=0.1)
