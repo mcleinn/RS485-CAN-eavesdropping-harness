@@ -69,6 +69,12 @@ def _classify_pylontech_result(cid2: int, pf, req_adr: int, req_ver: int,
         rtn_eff = rtn
     if rtn_eff == 0x00:
         entry["status"] = "ok"
+        if cid2 != 0x4F and pf.info == "":
+            # RTN=00 with no payload: the command is acknowledged but carries
+            # no data (Seplos 3.0 in PYLON mode does this for the whole 4x
+            # family and 0x60). Not a data source - say so.
+            entry["status"] = "ok-empty"
+            return entry
         decoded = P.decode_response_info(cid2, pf.info)
         if cid2 == 0x4F:
             decoded = {"protocol_version": f"{pf.ver:02X}"}
@@ -103,6 +109,7 @@ def _pylontech_discovery(link: Link, session: SessionWriter, chan: str,
     supported = [k for k, v in commands.items() if v["status"] == "ok"]
     state = _merge_state(commands)
     return {"commands": commands, "supported": supported,
+            "ok_empty": [k for k, v in commands.items() if v["status"] == "ok-empty"],
             "unsupported": [k for k, v in commands.items()
                             if v["status"] == "unsupported"],
             "silent": [k for k, v in commands.items()
@@ -289,7 +296,10 @@ def format_discovery(report: dict) -> str:
         return "\n".join(lines + [f"  {report['result']}"])
     lines.append(f"  responder: {report['responder']}")
     if "commands" in report:
-        lines.append(f"  supported:   {', '.join(report['supported']) or '-'}")
+        lines.append(f"  with data:   {', '.join(report['supported']) or '-'}")
+        if report.get("ok_empty"):
+            lines.append(f"  ok, empty:   {', '.join(report['ok_empty'])}  "
+                         f"(RTN=00 but no payload - acknowledged, no data)")
         lines.append(f"  unsupported: {', '.join(report['unsupported']) or '-'}")
         if report["silent"]:
             lines.append(f"  silent:      {', '.join(report['silent'])}")

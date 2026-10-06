@@ -251,6 +251,26 @@ Real captures and hard-won experience — several are decisive:
   the pack's BMS is hardware **V10 or V11** before flashing (wrong image
   doubles the displayed current).
 
+## Real-device validation — Seplos Mason 280L / BMS 3.0Y in PYLON mode (2026-10-06)
+
+Read on the inverter RS485 socket with the SAKO switched off (Port 1 =
+COM6, **9600 8N1**):
+- Answers at **ADR 01** and replies with ADR 01; accepts request VER 20
+  **and** 25 (reply VER 20).
+- **Data-bearing commands: 0x61, 0x62, 0x63, 0x4F only.** The whole 4x
+  family (0x42/44/47/51/92/93) and 0x60 reply **RTN=00 with an empty
+  payload** — acknowledged, no data. So no manufacturer name, serial,
+  per-cell list or system-parameter table is available over this port in
+  PYLON mode; what the SAKO gets is exactly 0x61/0x62/0x63.
+- **Latency**: 0x61 ≈ **150 ms**, others ≈ 50–65 ms (Pylontech US5000:
+  15–60 ms). Relevant for inverter timeout hypotheses.
+- Values at rest, full: 0x61 = 54.64 V, 0.0 A, SOC 100 %, SOH 100 %,
+  1 cycle, max cell 3.432 V / min 3.395 V, temps ≈ 19 °C;
+  0x63 = CVL **57.6 V** (3.60 V/cell), CCL **160 A**, discharge min 46.4 V,
+  DCL 180 A, charge+discharge enabled, no force/full-charge flags; 0x62 =
+  no alarms. (÷10 current scaling — cross-check 160 A against the Seplos
+  app's charge-current limit = the H5 unit check.)
+
 ## Real-device validation — Pylontech US5000C stack (2026-09-24)
 
 Verified on a 4-pack US5000C rack (fw 2.3) via the master's **B/RS485**
