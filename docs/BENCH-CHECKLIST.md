@@ -88,9 +88,14 @@ powercfg /change standby-timeout-ac 0
 powercfg /change standby-timeout-dc 0
 powercfg /setactive SCHEME_CURRENT
 ```
-Still open (needs admin): Device Manager > Universal Serial Bus controllers
-> each "USB Root Hub (USB 3.0)" > Power Management > untick "Allow the
-computer to turn off this device to save power".
+The per-device flag "Allow the computer to turn off this device to save
+power" (USB root hubs etc.) needs admin. From an elevated console:
+```
+powershell -ExecutionPolicy Bypass -File tools\usb-power-saving.ps1
+powershell -ExecutionPolicy Bypass -File tools\usb-power-saving.ps1 -Restore
+```
+The script clears the flag on all USB hubs/devices, applies the plan
+settings above, and saves the previous state for `-Restore`.
 
 Restore the previous values afterwards (display 5 min, sleep on battery
 10 min, USB selective suspend on):

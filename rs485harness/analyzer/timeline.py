@@ -12,6 +12,7 @@ CID2 - this works on one tap channel and across two bridge channels alike
 """
 from __future__ import annotations
 
+import bisect
 import csv
 import json
 import statistics
@@ -286,18 +287,53 @@ def build_timeline(path: Path | str, cfg: TimelineConfig | None = None) -> dict:
                  old=old, new=new, context=ctx, gaps=near_gap, errors=near_err,
                  unanswered=[{"t_rel": round(u["t"] - t0, 3), "cid2": f"{u['cid2']:02X}"}
                              for u in near_un])
-    # current exceeds CCL (after the CCL has been in effect for response_delay_s)
+    # current exceeds CCL. Judged against the most permissive CCL advertised
+    # during the trailing response_delay_s (not "this CCL value has been in
+    # effect that long"): during taper the CCL changes on every poll, which
+    # would otherwise mask a persistent excess. Consecutive violating samples
+    # are merged into one episode.
+    ccl_times = [ta for ta, _ in ccl_hist]
+
+    def _ccl_ceiling(t):
+        lo = bisect.bisect_left(ccl_times, t - cfg.response_delay_s)
+        hi = bisect.bisect_right(ccl_times, t)
+        if lo == 0:
+            return None                 # CCL not known for a full window yet
+        return max(c for _, c in ccl_hist[lo - 1:hi])
+
+    episode = None
+
+    def _close_episode():
+        e = episode
+        dur = e["t_end"] - e["t"]
+        find("current-exceeds-ccl", "warn", e["t"],
+             f"pack current above advertised CCL for {dur:.1f}s "
+             f"({e['n']} samples): worst {e['pack_i']} A vs CCL {e['ccl']} A "
+             f"(highest CCL in the preceding {cfg.response_delay_s:.0f}s: "
+             f"{e['ceiling']} A; tolerance {cfg.current_tolerance_a} A)",
+             pack_i=e["pack_i"], ccl=e["ccl"], ceiling=e["ceiling"],
+             duration_s=round(dur, 3), samples=e["n"], excess_a=round(e["excess"], 2))
+
     for r in samples:
         if r.get("pack_i") is None or r.get("ccl") is None:
             continue
-        t_ccl = max((ta for ta, _ in ccl_hist if ta <= r["t"]), default=None)
-        if t_ccl is None or r["t"] - t_ccl < cfg.response_delay_s:
+        ceiling = _ccl_ceiling(r["t"])
+        if ceiling is None:
             continue
-        if r["pack_i"] > r["ccl"] + cfg.current_tolerance_a:
-            find("current-exceeds-ccl", "warn", r["t"],
-                 f"pack current {r['pack_i']} A > advertised CCL {r['ccl']} A "
-                 f"(+{cfg.current_tolerance_a} A tolerance, CCL in effect "
-                 f"{r['t'] - t_ccl:.1f}s)", pack_i=r["pack_i"], ccl=r["ccl"])
+        excess = r["pack_i"] - ceiling
+        if excess > cfg.current_tolerance_a:
+            if episode is None:
+                episode = {"t": r["t"], "n": 0, "excess": -1.0}
+            episode["n"] += 1
+            episode["t_end"] = r["t"]
+            if excess > episode["excess"]:
+                episode.update(excess=excess, pack_i=r["pack_i"], ccl=r["ccl"],
+                               ceiling=ceiling)
+        elif episode is not None:
+            _close_episode()
+            episode = None
+    if episode is not None:
+        _close_episode()
     # CCL -> current response delay
     delays = []
     for e in ccl_change_events:

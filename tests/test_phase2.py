@@ -351,3 +351,39 @@ def test_live_state_change_lines():
     s.current_a = -5.0
     lines = pair(0x61, P.build_61(s), 3.0)
     assert lines and "I -20.0->-5.0A" in lines[0]
+
+
+def test_current_exceeds_ccl_while_ccl_falls_every_poll(tmp_path):
+    """Seen on the real Seplos/SAKO pair (2026-10-06): during taper the CCL
+    drops on every poll while the inverter holds its current. A check that
+    waits for 'this CCL value in effect for N s' never fires; the excess must
+    still be reported, as one merged episode."""
+    path = tmp_path / "falling.jsonl"
+    sess = SessionWriter(path)
+    t = 1_700_000_000.0
+    s = preset("ideal")
+
+    def poll(cid2, info, ts):
+        f = F.encode_frame(0x20, 0x12, 0x46, cid2, "12")
+        sess.log("ch1", "fwd", f, "frame", decoded=F.parse_frame(f).to_dict(),
+                 ts=ts, flow="INV->BMS", mode="transparent")
+        f = F.encode_frame(0x20, 0x12, 0x46, 0x00, info)
+        sess.log("ch2", "fwd", f, "frame", decoded=F.parse_frame(f).to_dict(),
+                 ts=ts + 0.05, flow="BMS->INV", mode="transparent")
+
+    ccl_seq = [40, 30, 19, 16, 13, 10, 8, 5, 2, 6, 8, 10, 12, 14]
+    cur_seq = [18.5] * 9 + [6.0] * 5
+    for i, (ccl, cur) in enumerate(zip(ccl_seq, cur_seq)):
+        base = t + i * 2.28
+        s.current_a = cur
+        poll(0x61, P.build_61(s), base)
+        s.charge_current_limit_da = ccl * 10
+        poll(0x63, P.build_63(s), base + 1.1)
+    sess.close()
+    res = build_timeline(path, TimelineConfig())      # default 5 s response delay
+    hits = [f for f in res["findings"] if f["kind"] == "current-exceeds-ccl"]
+    assert len(hits) == 1, hits
+    assert hits[0]["pack_i"] == 18.5 and hits[0]["samples"] >= 3
+    assert hits[0]["duration_s"] > 4.0
+    # the episode ends once the inverter has cut back to the recent CCL level
+    assert hits[0]["excess_a"] >= 5.0

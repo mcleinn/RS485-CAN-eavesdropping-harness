@@ -13,3 +13,4 @@ captures/
 # copyrighted, kept local only. Rebuild the folder from docs/refs/MANUAL-DOWNLOADS.md.
 docs/refs/*
 !docs/refs/MANUAL-DOWNLOADS.md
+tools/usb-power-saving.backup.json
