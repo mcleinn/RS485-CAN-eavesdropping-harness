@@ -168,7 +168,7 @@ def test_session_mark_and_arrival_timestamps(tmp_path):
     sess.close()
     recs = list(read_session(tmp_path / "m.jsonl"))
     assert recs[0]["flow"] == "BMS->INV" and recs[0]["mode"] == "tap" and recs[0]["len"] == 4
-    assert recs[1]["marker"] is True and recs[1]["note"] == "MARK maxcell=3.550"
+    assert recs[1]["marker"] is True and recs[1]["note"] == "MARK #1 maxcell=3.550"
     # arrival-time back-computation: the frame is ~0.5s older than the marker
     assert 0.4 < recs[1]["t"] - recs[0]["t"] < 0.7
 
@@ -246,3 +246,42 @@ def test_timeline_scaling_override(tmp_path):
     _synthetic_capture(path)
     res = build_timeline(path, TimelineConfig(ccl_factor=0.1, response_delay_s=0.0))
     assert [e["new"] for e in res["events"] if e["kind"] == "ccl-change"] == [0.6, 4.0, 0.0]
+
+
+def test_one_keypress_markers(tmp_path):
+    """Bench reality: a bare Enter, a single letter or a number must each
+    produce a usable, numbered marker; details can be filled in later."""
+    sess = SessionWriter(tmp_path / "k.jsonl")
+    sess.mark("")                 # bare Enter
+    sess.mark("r")                # shorthand
+    sess.mark("32")               # a current reading
+    sess.mark("red led flashing") # free text
+    sess.mark("MARK maxcell=3.55")
+    sess.close()
+    notes = [r["note"] for r in read_session(tmp_path / "k.jsonl")]
+    assert notes == ["MARK #1 (enter)", "MARK #2 rebound/current-rise",
+                     "MARK #3 inverter_current=32", "MARK #4 red led flashing",
+                     "MARK #5 maxcell=3.55"]
+    res = build_timeline(tmp_path / "k.jsonl")
+    assert len(res["markers"]) == 5
+
+
+def test_live_state_change_lines():
+    from rs485harness.analyzer.timeline import LiveState
+    live = LiveState(heartbeat_s=1000)
+    s = preset("ideal")
+    def pair(cid2, info, now):
+        req = F.parse_frame(F.encode_frame(0x20, 2, 0x46, cid2, ""))
+        resp = F.parse_frame(F.encode_frame(0x20, 2, 0x46, 0x00, info))
+        live.feed("INV->BMS", req, now)
+        return live.feed("BMS->INV", resp, now)
+    assert pair(0x63, P.build_63(s), 0.0) == []           # first value: no change line
+    s.charge_current_limit_da = 60
+    lines = pair(0x63, P.build_63(s), 1.0)
+    assert lines and lines[0].startswith("CHANGE ccl 100.0->6.0")
+    assert "CCL=6A" in lines[0]
+    s.current_a = -20.0
+    assert pair(0x61, P.build_61(s), 2.0) == []           # first current sample
+    s.current_a = -5.0
+    lines = pair(0x61, P.build_61(s), 3.0)
+    assert lines and "I -20.0->-5.0A" in lines[0]

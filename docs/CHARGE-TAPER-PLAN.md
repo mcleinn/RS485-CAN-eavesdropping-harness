@@ -127,12 +127,25 @@ it is ever trusted with Phase 2.
 
 Do **not** start with 100 A.
 
-Run (tap): `rsh sniff --ch1 COMx --baud 9600 --session captures/taper/T1-20A.jsonl`
-While it runs, type markers the moment you read the LCD / Seplos app:
-`MARK maxcell=3.500`, `MARK maxcell=3.550`, `MARK ovwarn=1`,
-`MARK inverter_current=32`, `MARK inverter_red_led`, `MARK note=...`.
-Mark **every** visible current step; the LCD-vs-wire offset is what
-distinguishes H1 from H2.
+Run (tap): `rsh sniff --ch1 COMx --baud 9600 --quiet --session captures/taper/T1-20A.jsonl`
+
+`--quiet` keeps the screen readable: no per-frame lines, only a decoded
+**CHANGE** line whenever CCL/CVL/charge-enable/OV-warn/current moves (plus
+a STATE heartbeat every 30 s), e.g.
+`14:02:11 CHANGE ccl 40.0->6.0  | I=5.8A CCL=6A CVL=56.80V MaxCell=3.552V SOC=99% chg=True full=False OVwarn=True`
+— MaxCell, pack current, OV-warn and the limits are all read off the wire,
+so you do **not** transcribe them.
+
+Markers are **one keypress**, only for things the wire cannot see
+(inverter LCD current, red LED, your own observations):
+- **Enter** alone = numbered marker "now" (`MARK #7`), fill in the meaning
+  later;
+- **`r`**+Enter = rebound/current rise, **`o`** = OV-warn seen, **`l`** =
+  red LED, **`z`** = current 0, **`x`** = something odd;
+- a **number**+Enter (`32`) = inverter current reading;
+- anything else is kept verbatim.
+Markers are numbered and timestamped; afterwards `rsh mark --at <time>`
+or the CSV lets you attach exact values to each number.
 
 ### 4.4 What to watch live
 Decoded one-line-per-frame view: CCL / CVL / charge_enable / OV-warn /

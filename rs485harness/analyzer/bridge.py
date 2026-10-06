@@ -31,6 +31,7 @@ from ..core.transport import Link, FrameAccumulator
 from ..core.session import SessionWriter, start_marker_reader
 from ..protocols.pylontech import frames as F
 from .translate import Translator
+from .timeline import LiveState
 
 ROLE_FLOW = {"inverter": "INV->BMS", "battery": "BMS->INV"}
 
@@ -40,7 +41,8 @@ class Bridge:
                  chan_a: str = "ch1", chan_b: str = "ch2",
                  translator: Translator | None = None, on_event=None,
                  role_a: str = "inverter", role_b: str = "battery",
-                 markers: bool = True, gap_note_s: float = 3.0):
+                 markers: bool = True, gap_note_s: float = 3.0,
+                 quiet: bool = False, heartbeat_s: float = 30.0):
         self.ends = {chan_a: link_a, chan_b: link_b}
         self.other = {chan_a: chan_b, chan_b: chan_a}
         self.roles = {chan_a: role_a, chan_b: role_b}
@@ -48,6 +50,8 @@ class Bridge:
         self.translator = translator
         self.mode = "modify" if translator is not None else "transparent"
         self.markers = markers
+        self.quiet = quiet
+        self.live = LiveState(heartbeat_s=heartbeat_s)
         self.gap_note_s = gap_note_s
         self.on_event = on_event or (lambda line: None)
         self.stop_event = threading.Event()
@@ -96,12 +100,16 @@ class Bridge:
                                      decoded=pf.to_dict(), errors=pf.errors,
                                      ts_mono=ev.ts, flow=flow, mode=self.mode)
                     role = "request" if flow == "INV->BMS" else "response"
-                    self.on_event(f"[{flow}] {pf.describe(role)}")
+                    if not self.quiet:
+                        self.on_event(f"[{flow}] {pf.describe(role)}")
+                    for line in self.live.feed(flow, pf, time.monotonic()):
+                        self.on_event(time.strftime("%H:%M:%S ") + line)
                 else:
                     self.stats[src_chan]["raw_bytes"] += len(ev.data)
                     self.session.log(src_chan, "fwd", ev.data, "raw",
                                      ts_mono=ev.ts, flow=flow, mode=self.mode)
-                    self.on_event(f"[{flow}] raw {len(ev.data)}B forwarded")
+                    if not self.quiet:
+                        self.on_event(f"[{flow}] raw {len(ev.data)}B forwarded")
 
     def _pump_modify(self, src_chan: str) -> None:
         src, dst = self.ends[src_chan], self.ends[self.other[src_chan]]

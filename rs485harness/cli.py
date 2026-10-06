@@ -421,7 +421,7 @@ def cmd_sniff(args) -> int:
     if args.ch2:
         links["ch2"] = _open_serial(args.ch2, args.baud, "ch2")
     sn = Sniffer(links, sess, on_event=_quiet if args.json else _echo,
-                 markers=not args.no_markers)
+                 markers=not args.no_markers, quiet=args.quiet)
     print(f"sniffing {', '.join(l.name for l in links.values())} @ "
           f"{args.baud} baud; Ctrl+C to stop; session: {sess.path}", flush=True)
     stats = sn.run(duration=args.duration)
@@ -463,7 +463,8 @@ def cmd_bridge(args) -> int:
             tr.engine = PolicyEngine(make_policy(args.policy), scales=scales,
                                      loss_timeout_s=args.loss_timeout)
     br = Bridge(a, b, sess, translator=tr, role_a=args.role_ch1, role_b=args.role_ch2,
-                markers=not args.no_markers, on_event=_quiet if args.json else _echo)
+                markers=not args.no_markers, quiet=args.quiet,
+                on_event=_quiet if args.json else _echo)
     print(f"bridging {args.ch1}({args.role_ch1}) <-> {args.ch2}({args.role_ch2}) @ "
           f"{args.baud} baud; MODE={br.mode}"
           + (f" [{tr.describe()}]" if tr else "")
@@ -681,6 +682,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--duration", type=float)
     p.add_argument("--no-markers", action="store_true",
                    help="do not read MARK lines from stdin")
+    p.add_argument("--quiet", action="store_true",
+                   help="no per-frame lines; print only decoded CHANGE lines "
+                        "(CCL/CVL/enable/OV-warn/current), a 30s STATE "
+                        "heartbeat and your markers - recommended at the bench")
     common(p)
     p.set_defaults(fn=cmd_sniff)
 
@@ -727,6 +732,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--scale-a", type=float, help="raw units per ampere (default 10)")
     p.add_argument("--scale-v", type=float, help="raw units per volt (default 1000)")
     p.add_argument("--no-markers", action="store_true")
+    p.add_argument("--quiet", action="store_true",
+                   help="no per-frame lines; only CHANGE/STATE lines + markers")
     common(p)
     p.set_defaults(fn=cmd_bridge)
 

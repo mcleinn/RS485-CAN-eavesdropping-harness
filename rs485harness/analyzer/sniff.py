@@ -8,6 +8,7 @@ from ..core.transport import Link, FrameAccumulator
 from ..core.session import SessionWriter, start_marker_reader
 from ..protocols.pylontech import frames as F
 from .classify import classify_raw
+from .timeline import LiveState
 
 
 def infer_flow(pf: F.ParsedFrame) -> str | None:
@@ -22,10 +23,13 @@ def infer_flow(pf: F.ParsedFrame) -> str | None:
 
 class Sniffer:
     def __init__(self, links: dict[str, Link], session: SessionWriter,
-                 on_event=None, markers: bool = True):
+                 on_event=None, markers: bool = True, quiet: bool = False,
+                 heartbeat_s: float = 30.0):
         self.links = links
         self.session = session
         self.markers = markers
+        self.quiet = quiet              # no per-frame lines, only changes/heartbeat
+        self.live = LiveState(heartbeat_s=heartbeat_s)
         self.on_event = on_event or (lambda line: None)
         self.stop_event = threading.Event()
         self.stats = {chan: {"frames": 0, "raw_bytes": 0} for chan in links}
@@ -48,7 +52,10 @@ class Sniffer:
                                      ts_mono=ev.ts, flow=flow, mode="tap")
                     self.stats[chan]["frames"] += 1
                     role = "request" if flow == "INV->BMS" else "response"
-                    self.on_event(f"[{chan}] {flow or '?':8} {pf.describe(role)}")
+                    if not self.quiet:
+                        self.on_event(f"[{chan}] {flow or '?':8} {pf.describe(role)}")
+                    for line in self.live.feed(flow, pf, time.monotonic()):
+                        self.on_event(time.strftime("%H:%M:%S ") + line)
                 else:
                     cls = classify_raw(ev.data)
                     self.session.log(chan, "rx", ev.data, "raw", decoded=cls,

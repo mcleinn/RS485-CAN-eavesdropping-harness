@@ -347,6 +347,59 @@ def build_timeline(path: Path | str, cfg: TimelineConfig | None = None) -> dict:
             "findings": findings, "unanswered": len(unanswered)}
 
 
+class LiveState:
+    """Lightweight live pairing/decoding for the capture tools: feed frames
+    as they arrive, get back one-line summaries whenever a watched charge
+    field changes (plus a periodic heartbeat). Lets the operator read CCL /
+    current / MaxCell / OV-warn off the wire instead of transcribing LCDs."""
+
+    def __init__(self, heartbeat_s: float = 30.0, cfg: TimelineConfig | None = None):
+        self.cfg = cfg or TimelineConfig()
+        self.heartbeat_s = heartbeat_s
+        self.state: dict = {}
+        self.pending_cid2: int | None = None
+        self.last_print = 0.0
+
+    def summary(self) -> str:
+        st = self.state
+        def f(k, fmt="{}"):
+            v = st.get(k)
+            return "-" if v is None else fmt.format(v)
+        return (f"I={f('pack_i', '{:.1f}')}A CCL={f('ccl', '{:g}')}A "
+                f"CVL={f('cvl', '{:.2f}')}V MaxCell={f('max_cell', '{:.3f}')}V "
+                f"SOC={f('soc')}% chg={f('charge_enable')} "
+                f"full={f('full_charge_request')} OVwarn={f('ov_warn')}")
+
+    def feed(self, flow: str | None, pf, now: float) -> list[str]:
+        out: list[str] = []
+        if pf.cid2 is None:
+            return out
+        if flow == "INV->BMS":
+            self.pending_cid2 = pf.cid2
+            return out
+        if flow != "BMS->INV" or self.pending_cid2 is None or not pf.ok:
+            return out
+        payload = P.decode_response_info(self.pending_cid2, pf.info)
+        if not payload or "decode_error" in payload:
+            return out
+        new = _extract(self.pending_cid2, payload, self.cfg)
+        changed = []
+        for k, v in new.items():
+            old = self.state.get(k)
+            if k in WATCHED and old is not None and old != v:
+                changed.append(f"{k} {old}->{v}")
+            elif k == "pack_i" and old is not None and abs(v - old) >= self.cfg.current_step_a:
+                changed.append(f"I {old}->{v}A")
+            self.state[k] = v
+        if changed:
+            out.append("CHANGE " + ", ".join(changed) + "  | " + self.summary())
+            self.last_print = now
+        elif now - self.last_print >= self.heartbeat_s:
+            out.append("STATE  " + self.summary())
+            self.last_print = now
+        return out
+
+
 def state_at(samples: list[dict], t: float, key: str):
     val = None
     for r in samples:
