@@ -75,13 +75,33 @@ class Sniffer:
                                  daemon=True, name=f"sniff-{chan}")
             t.start()
             self._threads.append(t)
+        started = time.monotonic()
+        warned = False
         try:
-            if duration:
-                self.stop_event.wait(duration)
-                self.stop_event.set()
-            else:
-                while not self.stop_event.wait(0.5):
-                    pass
+            while not self.stop_event.wait(0.5):
+                if duration and time.monotonic() - started >= duration:
+                    self.stop_event.set()
+                    break
+                # wrong-channel / wrong-baud hint: a live inverter link shows
+                # frames within a few seconds; prolonged silence is almost
+                # always the other COM port (channel labels != COM order) or
+                # the wrong baud.
+                total_frames = sum(c["frames"] for c in self.stats.values())
+                total_raw = sum(c["raw_bytes"] for c in self.stats.values())
+                if not warned and time.monotonic() - started > 10:
+                    warned = True
+                    names = ", ".join(l.name for l in self.links.values())
+                    if total_frames == 0 and total_raw == 0:
+                        self.on_event(f"!! no bytes at all on {names} after 10s - "
+                                      f"wrong channel? (on this adapter Port 1 was "
+                                      f"COM6, Port 2 COM5), or A/B not on the live "
+                                      f"pair. Ctrl+C and try the other COM.")
+                        self.session.note("silence warning: no bytes after 10s")
+                    elif total_frames == 0:
+                        self.on_event(f"!! {total_raw} bytes but no valid frames on "
+                                      f"{names} after 10s - wrong baud? (SAKO link = "
+                                      f"9600, Pylontech monitor = 115200) or A/B swapped.")
+                        self.session.note("silence warning: bytes but no frames after 10s")
         except KeyboardInterrupt:
             self.stop_event.set()
         for t in self._threads:
