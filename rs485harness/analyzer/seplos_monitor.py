@@ -19,6 +19,7 @@ from ..core.session import SessionWriter
 from . import seplos_native as SN
 
 TOP_CELL_MIN_SPREAD_MV = 10      # below this the "top cell" is noise
+TOP_CELL_LEAD_V = 0.003          # new top cell must lead the old one by this
 BALANCE_PRINT_EVERY_S = 15.0
 
 
@@ -67,8 +68,14 @@ def diff_samples(prev: dict | None, cur: dict, limits: bool = True) -> list[str]
             out.append(f"{label}: {cur[key] or 'none'}")
     if (cur.get("spread_mv", 0) >= TOP_CELL_MIN_SPREAD_MV and
             prev.get("max_cell_no") != cur.get("max_cell_no")):
-        out.append(f"top cell is now #{cur['max_cell_no']} "
-                   f"({cur['max_cell']:.3f} V, spread {cur['spread_mv']} mV)")
+        # only when the new top cell is clearly ahead of the previous one
+        # (two cells within a millivolt of each other just trade places)
+        cells = cur.get("cells") or []
+        old_no = prev.get("max_cell_no")
+        old_v = cells[old_no - 1] if old_no and old_no <= len(cells) else None
+        if old_v is None or cur["max_cell"] - old_v >= TOP_CELL_LEAD_V:
+            out.append(f"top cell is now #{cur['max_cell_no']} "
+                       f"({cur['max_cell']:.3f} V, spread {cur['spread_mv']} mV)")
     if limits and prev.get("bms_charge_a") != cur.get("bms_charge_a"):
         out.append(f"BMS allowed charge current {prev.get('bms_charge_a')} -> "
                    f"{cur.get('bms_charge_a')} A")
