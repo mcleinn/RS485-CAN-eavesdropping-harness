@@ -143,3 +143,40 @@ settings by name), `seplos-set` (guarded write of 102/103), `seplos-monitor`
 and `sniff --service` (cells, flags, charge switch, balancing, settings
 changes, merged into `timeline` with `.service.csv`). Verified against the
 real pack on 2026-10-10.
+
+## 6. Supported charge current with the 55.2 V setting (inferred from the recordings)
+
+Measured, all four runs (bulk phase, current within 2 A of the plateau):
+
+| pack voltage | 2026-10-06 20 A | 2026-10-06 40 A | 2026-10-06 60 A | 2026-10-10 40 A |
+|---|---|---|---|---|
+| 55.0 V: fullest cell / spread / BMS limit | – | 3.458 V / 42 mV / 90 A | 3.455 V / 36 mV / 95 A | 3.446 V / 14 mV / 116 A |
+| 55.2 V (10-10: 55.17 V in CV) | 3.476 V / 52 mV / 70 A | 3.476 V / 50 mV / 70 A | 3.471 V / 42 mV / 75 A | 3.461 V / 19 mV / 86 A |
+
+1. At a given pack voltage the fullest cell does not depend on the current
+   (18.5–58.3 A: within 5 mV); it depends on the cell spread, which was
+   42–52 mV on 10-06 and 14–19 mV on 10-10.
+2. The BMS limit as a function of the fullest cell (pooled, 5 mV bins):
+   3.425 V 180 A · 3.44 V 134 A · 3.45 V 100 A · 3.46 V 86 A · 3.47 V 78 A ·
+   3.48 V 64 A · 3.50 V 40 A · 3.52 V 24 A · 3.54 V 8 A.
+3. Hence the BMS limit at the 55.2 V target is **70–75 A (10-06 balance
+   state) or 86 A (10-10 state)**. An inverter setting below that reaches
+   the target without any cut-back request and tapers in the inverter's
+   constant-voltage mode (as seen at 40 A on 10-10).
+4. Settings above that get cut-back requests shortly before the target:
+   at 100 A from pack 55.06 V (10-10) / 54.95 V (10-06), at 120 A from
+   54.96 / 54.86 V. The pack is still capped at 55.2 V, where the fullest
+   cell stays at 3.46–3.48 V whatever the current, i.e. below the 3.50 V
+   alarm and the 3.55 V stop. The inverter's step behaviour when a cut-back
+   request and its own voltage regulation coincide has not been recorded.
+5. Hard limits that are facts, not inferences: Mason 280L spec rated
+   charge current 100 A @ 25 °C (200 A max); Seplos setting 103 = 180 A
+   (largest limit it will ever send); charge over-current alarm/protection
+   205/210 A.
+
+Conclusion: **70 A is supported without any BMS intervention in both
+observed balance states; 80 A in the 10-10 state (margin 7 A); 90–100 A
+only with brief cut-back requests in the last ~0.15 V before the target,
+bounded by the voltage cap; above 100 A the pack's own rating is the
+limit.** The supported current moves with the cell spread: if the spread
+grows back to 50 mV, the no-intervention limit falls to ~70 A.
