@@ -48,6 +48,15 @@ for path, label, color in RUNS:
              label="   BMS charge limit (CCL from 0x63, clipped at 60 A)")
     ax2.plot(tr, mv[s:e], color=color, label=label, lw=1.2)
     ax3.plot(mv[s:e], i[s:e], color=color, label=label, lw=0.8, marker=".", ms=3)
+    # minute marks along the trace so the direction/speed of travel is visible
+    next_min = 0
+    for k in range(s, e):
+        m = (t[k] - t0) / 60
+        if m >= next_min:
+            ax3.annotate(f"{next_min}'", (mv[k], i[k]), fontsize=7, color=color,
+                         xytext=(3, 3), textcoords="offset points")
+            ax3.plot(mv[k], i[k], "o", color=color, ms=5, mfc="white")
+            next_min += 1
     d0 = datetime.datetime.fromtimestamp(t[s]).strftime("%H:%M:%S")
     d1 = datetime.datetime.fromtimestamp(t[e - 1]).strftime("%H:%M:%S")
     print(f"{label}: {e - s} samples {d0}-{d1}, I max {max(i[s:e]):.1f} A, "
@@ -65,7 +74,7 @@ for y, txt in ((3.50, "3.50 V: BMS limit ~40 A"), (3.55, "3.55 V: BMS charge sto
 ax2.grid(alpha=.3); ax2.legend()
 
 ax3.set_xlabel("fullest cell [V]"); ax3.set_ylabel("charge current [A]")
-ax3.set_title("charge current vs fullest cell (same samples, time runs along the trace)")
+ax3.set_title("charge current vs fullest cell (same samples; circles = minutes since start)")
 ax3.grid(alpha=.3); ax3.legend()
 plt.tight_layout()
 out = "docs/img/40A-runs-57V6-vs-55V2.png"
