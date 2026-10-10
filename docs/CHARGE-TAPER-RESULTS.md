@@ -114,6 +114,15 @@ limit drops below 100 A at ~54.9 V, so some cut-back requests (and a mild,
 bounded seesaw) are possible in the last 0.3 V. 54.8 V would avoid even
 that at the price of a slightly lower end-of-charge.
 
+![The two 40 A runs: current, fullest cell, current vs fullest cell](img/40A-runs-57V6-vs-55V2.png)
+
+Both 40 A runs plotted from the inverter-link captures (frame 0x61 every
+2.3 s, BMS limit from 0x63): 2026-10-06 with the 57.6 V default (red,
+19:57–20:02, ended by mains-off) and 2026-10-10 with 55.2 V (green,
+17:58–18:10, ended by the outage). The 10-10 run starts from a lower cell
+voltage because the latch had just been cleared by a 95 A discharge.
+Plot script: `tools/plot-40A-runs.py`.
+
 ## 4. Open points / next steps
 
 1. Repeat with the fix at 60 A, then 80 A, then 100 A, same setup
