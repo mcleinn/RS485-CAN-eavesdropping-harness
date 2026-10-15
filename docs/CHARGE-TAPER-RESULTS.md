@@ -25,7 +25,11 @@ All captures: `captures/taper/` (git-ignored).
    voltage" 57.6 → **55.2 V**. At 40 A the inverter then held the pack at
    55.1–55.2 V and tapered the current by itself (39 → 2 A, smoothly) while
    the BMS limit stayed at 86–94 A; fullest cell flat at 3.460 V, no alarm,
-   no seesaw. Higher currents (60/80/100 A) not yet tested with the fix.
+   no seesaw.
+5. **Higher currents verified 2026-10-15 (section 7):** 60 A, 80 A and the
+   inverter's own maximum (89.6 A, setting 100 A) all reach the voltage cap
+   without a single BMS cut-back request; smallest margin to the BMS limit
+   28 A; fullest cell never above 3.46 V. Recommended everyday setting: 80 A.
 
 ## 2. Measured behaviour (unmodified system)
 
@@ -125,10 +129,8 @@ Plot script: `tools/plot-40A-runs.py`.
 
 ## 4. Open points / next steps
 
-1. Repeat with the fix at 60 A, then 80 A, then 100 A, same setup
-   (`rsh sniff --ch1 <tap> --service <service port> --quiet`), checking the
-   fullest cell stays below 3.50 V; lower setting 102 to 55.0 V if a cell
-   creeps.
+1. ~~Repeat with the fix at 60 A, then 80 A, then 100 A~~ — done 2026-10-15,
+   section 7.
 2. Watch how a charge ends by itself with 55.2 V (float / "full" handling
    by both devices) — the 40 A run was interrupted by the outage.
 3. The cell that ran ahead on 2026-10-06 (160 mV spread at the top) did not
@@ -189,3 +191,59 @@ only with brief cut-back requests in the last ~0.15 V before the target,
 bounded by the voltage cap; above 100 A the pack's own rating is the
 limit.** The supported current moves with the cell spread: if the spread
 grows back to 50 mV, the no-intervention limit falls to ~70 A.
+
+## 7. 60 / 80 / 100 A with the 55.2 V setting (2026-10-15)
+
+Same setup (`rsh sniff --ch1 COM5 --service COM8 --quiet`, one session
+`T2-60A-tap-plus-service.jsonl`; analysed snapshot `T2-runs-snapshot-2031`).
+Each run: discharge with house loads (50–97 A) until the fullest cell read
+≈3.33 V under load, then mains on. Inverter program 02 = setting below,
+program 11 (max utility charge current) = 100 A, program 02 maximum 120 A.
+
+![2026-10-15 runs](img/2026-10-15-runs-60-80-100A.png)
+
+| setting | start SOC | plateau | cap engaged (battery-side V, time) | BMS limit then | smallest margin limit − current | fullest cell peak | spread | flags |
+|---|---|---|---|---|---|---|---|---|
+| 60 A | 99.0 % | 58.4 A, 74 s | 55.06 V, 19:39:11 | 100 A | 44 A | 3.459 V | 22 mV | none |
+| 80 A | 99.0 % | 77.8 A, 20 s | 55.02 V, 19:49:29 | 106 A | 30 A | 3.457 V | 20 mV | none |
+| 100 A | 98.9 % | none: cap hit at 83.9 A while still ramping | 54.98 V, 19:57:31 | 116 A | 29 A | 3.455 V | 19 mV | none |
+| 100 A | 93.7 % | 89.6 → 88.2 A, 10.5 min | 55.01 V, 20:30:20 | 116 A | 28 A | 3.454 V | 23 mV | none |
+
+Observations (all measured):
+
+1. **No cut-back request in any run.** The BMS limit never came closer than
+   28 A to the delivered current; the inverter's own voltage regulation took
+   over first every time and tapered the current smoothly (see chart).
+2. **The cap engages at 54.9–55.06 V on the battery side, not 55.2 V,** and
+   earlier the higher the current (55.06 V at 55 A, 55.02 V at 74 A,
+   54.98 V at 80 A, 55.01 V at 87 A). Consistent with a resistance of
+   ~3 mΩ between inverter terminals and battery (cables, breaker, BMS):
+   the inverter sees 55.2 V while the battery is 0.15–0.3 V lower. This
+   works in our favour: the fullest cell is still at 3.44–3.45 V when the
+   cap engages, and it settles at 3.455–3.46 V, below the 3.50 V alarm.
+3. **The inverter's ceiling is 89.6 A** (setting 100 A, programs 02 = 120 A
+   and 11 = 100 A): plateau 89.8 A at the start drifting to 88.2 A after
+   10 min. Cause not identified (spec sheet says AC charge max 100 A at
+   230 Vac). All lower settings delivered setting − 1.5…2.2 A as before.
+4. BMS limit vs fullest cell today: 180 A below 3.425 V, 166 A at 3.430,
+   133 A at 3.440, 116 A at 3.445, 100 A at 3.449–3.451, 96–98 A at
+   3.452–3.453 (same curve as on 10-06/10-10, 5 mV bins).
+5. Battery warnings/protections: none in 65 min; modes only
+   Charge/Discharge/Standby. Inverter code 32 seen by the user at ≈19:57
+   during the 100 A ramp — no polling pause on the link at that time
+   (gaps only at the mains switch-overs 19:43:29 and 19:51:33), so the code
+   is not accompanied by a BMS-link re-init this time.
+6. Tooling: Waveshare tap (COM5) had 10 USB drop-outs, all auto-reopened,
+   traced by the user to a loose/damaged USB cable (touching it triggers
+   them); one 140 s gap during a discharge, none during the four charge
+   windows. The Seplos FTDI adapter (COM8) had none, but its driver hung
+   once at session start (process unkillable until the adapter was
+   replugged).
+
+**Conclusion:** with charge request 55.2 V the BMS limit is not the
+limiting factor at any current this inverter can deliver, in today's
+balance state (top-of-charge spread 19–23 mV). 80 A is the recommended
+everyday setting (margin ≥ 30 A to the limit, within the pack's 100 A
+rating, and with margin even in the 50 mV-spread state of 10-06 where the
+limit at 55.0 V was 90–95 A). The 100 A setting gains ~10 A at most.
+Still unrecorded: a natural end of charge (float/full handling) at 55.2 V.

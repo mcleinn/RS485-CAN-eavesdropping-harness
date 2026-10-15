@@ -89,7 +89,7 @@ rsh identify --port COM5  # first thing to run against a real device
 
 ## Documentation
 
-- `docs/CHARGE-TAPER-RESULTS.md` — what was measured, why it rebounds, the 55.2 V fix and its verification, open points
+- `docs/CHARGE-TAPER-RESULTS.md` — what was measured, why it rebounds, the 55.2 V fix and its verification at 40/60/80/90 A (charts in `docs/img/`), open points
 - `docs/BENCH-CHECKLIST.md` — terse at-the-bench step card (wiring +
   exact commands + pass/fail gates)
 - `docs/CHARGE-TAPER-PLAN.md` — the Seplos↔SAKO charge-rebound
