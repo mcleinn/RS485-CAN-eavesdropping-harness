@@ -87,6 +87,18 @@ BATTERY_PROFILES: dict[str, DialectProfile] = {
                     "replying RTN=04.",
         unknown_cmd="silence",
     ),
+    "dyness-dl": DialectProfile(
+        name="dyness-dl",
+        description="Dyness DL/B-series pack as reported on real units "
+                    "(B3, B4850; docs/refs/dyness): Pylontech 0x42-family "
+                    "only, answers 0x42/0x4F/0x93 at addresses 00-02 echoing "
+                    "the request address, stays silent on the 0x6x system "
+                    "family, 9600 baud (DIP #4 off).",
+        families=("4x",),
+        response_adr="echo",
+        listen_adrs=(0x00, 0x01, 0x02),
+        unknown_cmd="silence",
+    ),
     "slow-responder": DialectProfile(
         name="slow-responder",
         description="Responds correctly but slowly (500 ms) - for testing "

@@ -33,7 +33,7 @@ PYLONTECH_SWEEP = [
     (0x92, "pack"), (0x93, "pack"),
 ]
 
-# Voltronic 'Inverter and BMS 485' register blocks (docs/refs/...20201202.txt)
+# Voltronic 'Inverter and BMS 485' register blocks (docs/refs/sako/Voltronic-Inverter-BMS-485-protocol-20201202.txt)
 VOLTRONIC_BLOCKS = [
     (0x0001, 8, "version-info"),
     (0x0010, 37, "status"),        # 0x0010..0x0034: cells, temps, I, V, SOC

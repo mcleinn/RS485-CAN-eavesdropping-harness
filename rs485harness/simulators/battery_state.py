@@ -139,7 +139,18 @@ def preset(name: str) -> BatteryState:
             charge_voltage_limit_mv=56800, discharge_voltage_min_mv=46400,
             charge_current_limit_da=2000, discharge_current_limit_da=2000,
         )
-    raise KeyError(f"unknown battery preset '{name}' (have: ideal, seplos-280l)")
+    if name == "dyness-dl5":
+        # Dyness DL5.0C Pro: 16S LiFePO4 51.2 V / 100 Ah (spec in docs/refs/
+        # dyness). Health fields as a used pack might show them.
+        return BatteryState(
+            device_name="DL5.0C PRO", manufacturer="DYNESS",
+            serial_number="DYNESSDL5C000001",
+            total_mah=100000, remaining_mah=71000,
+            charge_voltage_limit_mv=56000, discharge_voltage_min_mv=44800,
+            charge_current_limit_da=1000, discharge_current_limit_da=1000,
+            cycles=812, soh_percent=93,
+        )
+    raise KeyError(f"unknown battery preset '{name}' (have: {', '.join(PRESETS)})")
 
 
-PRESETS = ("ideal", "seplos-280l")
+PRESETS = ("ideal", "seplos-280l", "dyness-dl5")

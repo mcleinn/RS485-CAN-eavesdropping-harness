@@ -150,6 +150,36 @@ logged to the session JSONL like every other tool.
 Because scenarios are plain JSON, an LLM can generate and run them on the
 fly — this is the "hand the model the wire" surface.
 
+## Pre-purchase battery check (Pylontech-protocol packs, e.g. Dyness DL5.0C Pro)
+
+What one `tools/termux/battery-readout.sh` run (or the same three commands
+by hand) gives you, read-only, in under two minutes:
+
+| from | fields |
+|---|---|
+| `identify` | protocol, baud, address, which command families answer |
+| `discover` | every command supported/silent/error, dialect quirks, decoded state |
+| `dump` | per unit: all cell voltages (spread = balance health), temperatures, pack V/I, SOC, remaining/total Ah, **cycle count**, charge/discharge limits, alarms/protections, **serial number**, firmware version, manufacturer |
+
+SOH is only present if the pack puts it into the 0x42 user-defined block
+(Pylontech US-series do; a Dyness B3 did not, per the field report linked in
+`docs/refs/MANUAL-DOWNLOADS.md`). Cycle count and cell spread under load are
+the stronger evidence anyway.
+
+Dyness DL5.0C Pro specifics (manual in `docs/refs/dyness`): RS485 on the
+"485" RJ45, **pin 1 = 485B, pin 2 = 485A**; 9600 8N1 with DIP #4 off (115200
+if on); protocol family Pylontech 0x42 (monitoring) on addresses 00-02, the
+0x6x inverter family may stay silent - `discover` shows this as "silent",
+not as a fault. Battery power switch ON, nothing else connected. If the
+pack answers at several addresses, trust the one whose voltage/current look
+real (field report: a B3 answered at 00/01/02 with sane data only at 02);
+`dump` prints all of them.
+
+Kit: phone2 + Waveshare on OTG (or the notebook), an RJ45 patch cable cut
+open or an RJ45 breakout, two wires to the adapter's A/B. The simulated
+Dyness (`rsh battery-sim --profile dyness-dl --preset dyness-dl5`) is what
+the test suite checks the readout against.
+
 ## Android / Termux (no root)
 
 The harness runs unchanged on a phone in Termux; only the serial transport
