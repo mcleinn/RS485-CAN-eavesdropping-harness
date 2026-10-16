@@ -62,9 +62,11 @@ def _quiet(line: str) -> None:
 
 
 def cmd_ports(args) -> int:
-    from serial.tools import list_ports
-    ports = [{"device": p.device, "description": p.description,
-              "hwid": p.hwid} for p in list_ports.comports()]
+    ports = []
+    if sys.platform != "android":   # pyserial cannot enumerate ttys there
+        from serial.tools import list_ports
+        ports = [{"device": p.device, "description": p.description,
+                  "hwid": p.hwid} for p in list_ports.comports()]
     fd = os.environ.get("RSH_USB_FD")
     if fd:   # Android/Termux: the one device termux-usb handed us
         from .core.ftdi_usb import describe_device

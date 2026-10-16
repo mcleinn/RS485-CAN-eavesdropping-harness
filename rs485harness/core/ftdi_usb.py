@@ -21,6 +21,7 @@ without hardware.
 """
 from __future__ import annotations
 
+import atexit
 import os
 import threading
 import time
@@ -138,10 +139,25 @@ class _Device:
             raise OSError(f"USB device {self.vid:04x}:{self.pid:04x} is not an "
                           f"FTDI chip (only FTDI is supported over usb:)")
         self.n_chan, self.h_type = FTDI_PRODUCTS.get(self.pid, (1, False))
-        self.product = dev.getProduct()
+        try:
+            self.product = dev.getProduct() or f"FTDI {self.pid:04x}"
+        except usb1.USBError as e:   # string descriptor fetch failed: not fatal
+            self.product = f"FTDI {self.pid:04x} (descriptor read failed: {e})"
         self.max_packet = 512 if self.h_type else 64
         self.claimed: set[int] = set()
         self.io_lock = threading.Lock()
+        atexit.register(self._atexit)
+
+    def _atexit(self) -> None:
+        """Close through the workaround path even if a caller forgot to,
+        otherwise usb1's own exit finalizer trips its assertion."""
+        if self.fd in _Device._by_fd:
+            for idx in list(self.claimed):
+                self.release(idx)
+            try:
+                self.close_if_unused()
+            except Exception:
+                pass
 
     def claim(self, idx: int) -> None:
         if idx >= self.n_chan:
@@ -169,11 +185,38 @@ class _Device:
         if self.claimed:
             return
         with _Device._lock:
-            _Device._by_fd.pop(self.fd, None)
+            if _Device._by_fd.pop(self.fd, None) is None:
+                return                       # already closed
         try:
-            self.handle.close()
+            _close_wrapped_handle(self.handle)
         finally:
             self.ctx.close()
+
+
+def _close_wrapped_handle(handle) -> None:
+    """Close a handle from USBContext.wrapSysDevice().
+
+    python-libusb1 (3.3.1 and 3.4.0) registers the handle's finalizer in the
+    device's finalizer dict AND lets the handle close the device; closing
+    then re-enters that dict while the handle's own finalizer is still
+    listed and trips an assertion before libusb_close() is reached (the fd
+    then stays open and Android re-enumerates the adapter). Take the
+    handle's finalizer out of the device's dict first; the finalizer's own
+    pop() in its finally-clause raises KeyError afterwards, by which time
+    libusb_close() has run."""
+    try:
+        dev = handle.getDevice()
+        fdict = getattr(dev, "_finalizer_dict", None)
+        if isinstance(fdict, dict):
+            for key, fin in list(fdict.items()):
+                if fin is handle.close:
+                    fdict.pop(key, None)
+    except Exception:
+        pass
+    try:
+        handle.close()
+    except KeyError:
+        pass
 
 
 class FtdiUsbLink(Link):
@@ -296,6 +339,8 @@ class FtdiUsbLink(Link):
 def describe_device(fd: int) -> dict:
     """Enumerate the device behind an fd (for `rsh ports` on Termux)."""
     d = _Device.get(fd)
-    return {"device": f"usb:{fd}", "vid": d.vid, "pid": d.pid,
+    info = {"device": f"usb:{fd}", "vid": d.vid, "pid": d.pid,
             "product": d.product, "channels": CHANNEL_NAMES[:d.n_chan],
             "hwid": f"USB VID:PID={d.vid:04X}:{d.pid:04X}"}
+    d.close_if_unused()     # a handle left open trips usb1's exit finalizer
+    return info
