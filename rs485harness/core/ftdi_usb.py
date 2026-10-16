@@ -47,6 +47,10 @@ FTDI_PRODUCTS = {
     0x6015: (1, False),   # FT-X series (FT230X, FT231X)
 }
 CHANNEL_NAMES = "ABCD"
+LATENCY_MS = 4
+IO_ERROR_PAUSE_S = 0.005          # after a transient bulk-read error
+IO_ERRORS_FATAL = 200             # consecutive errors before giving up
+CTRL_RETRIES = 8                  # control transfers: retries on USB error
 
 
 # ----------------------------------------------------------- pure helpers
@@ -234,10 +238,16 @@ class FtdiUsbLink(Link):
         self._pushback = b""
         self._baud = 0
         self.write_timeouts = 0
+        self.io_errors = 0            # transient USB errors ridden through
+        self._consecutive_errors = 0
         u = self.dev.usb1
         self._req_out = u.REQUEST_TYPE_VENDOR | u.RECIPIENT_DEVICE | u.ENDPOINT_OUT
         self._ctrl(SIO_RESET, SIO_RESET_SIO)
-        self._ctrl(SIO_SET_LATENCY, 1)            # 1 ms, like the FTDI driver setting
+        # latency timer: 4 ms (not 1 ms as on the PC driver) - every expiry
+        # is a USB transaction even with no data, and marginal cables/OTG
+        # links drop transactions under that rate; 4 ms is still far below
+        # the protocol timings we measure (tens of ms).
+        self._ctrl(SIO_SET_LATENCY, LATENCY_MS)
         self._ctrl(SIO_SET_FLOW_CTRL, 0)
         self._ctrl(SIO_SET_DATA, 0x0008)          # 8 data bits, no parity, 1 stop
         self.set_baud(baud)
@@ -245,10 +255,20 @@ class FtdiUsbLink(Link):
 
     # ------------------------------------------------------------ control
     def _ctrl(self, request: int, value: int, index_high: int = 0) -> None:
-        with self.dev.io_lock:
-            self.dev.handle.controlWrite(self._req_out, request, value,
-                                         (index_high << 8) | self.port, b"",
-                                         timeout=500)
+        u = self.dev.usb1
+        for attempt in range(CTRL_RETRIES):
+            try:
+                with self.dev.io_lock:
+                    self.dev.handle.controlWrite(self._req_out, request, value,
+                                                 (index_high << 8) | self.port,
+                                                 b"", timeout=500)
+                return
+            except u.USBError as e:          # transient on marginal links
+                self.io_errors += 1
+                if attempt == CTRL_RETRIES - 1:
+                    raise OSError(f"{self.name}: FTDI control request "
+                                  f"{request:#x} failed {CTRL_RETRIES}x ({e!r})") from e
+                time.sleep(0.01 * (attempt + 1))
 
     def set_baud(self, baud: int) -> None:
         if baud != self._baud:
@@ -276,7 +296,20 @@ class FtdiUsbLink(Link):
             try:
                 raw = self.dev.handle.bulkRead(self.ep_in, self.dev.max_packet * 4,
                                                timeout=max(1, int(timeout * 1000)))
+                self._consecutive_errors = 0
             except u.USBErrorTimeout:
+                raw = b""
+            except u.USBError as e:
+                # LIBUSB_ERROR_IO etc.: seen in bursts on marginal USB links
+                # (OTG adapters, worn cables) while the device stays
+                # enumerated; ride through, give up only if persistent.
+                self.io_errors += 1
+                self._consecutive_errors += 1
+                if self._consecutive_errors >= IO_ERRORS_FATAL:
+                    self._consecutive_errors = 0
+                    raise OSError(f"{self.name}: {IO_ERRORS_FATAL} consecutive "
+                                  f"USB read errors ({e!r}) - link lost?") from e
+                time.sleep(IO_ERROR_PAUSE_S)
                 raw = b""
             data = strip_status(raw, self.dev.max_packet)
             if data:
@@ -286,14 +319,24 @@ class FtdiUsbLink(Link):
 
     def write(self, data: bytes) -> None:
         u = self.dev.usb1
-        try:
-            with self.dev.io_lock:
-                self.dev.handle.bulkWrite(self.ep_out, data, timeout=1000)
-        except u.USBErrorTimeout:
-            self.write_timeouts += 1
-            print(f"[{self.name}] WRITE TIMEOUT - TX stalled "
-                  f"(#{self.write_timeouts}); bytes not sent", flush=True)
-            return
+        for attempt in range(CTRL_RETRIES):
+            try:
+                with self.dev.io_lock:
+                    self.dev.handle.bulkWrite(self.ep_out, data, timeout=1000)
+                break
+            except u.USBErrorTimeout:
+                self.write_timeouts += 1
+                print(f"[{self.name}] WRITE TIMEOUT - TX stalled "
+                      f"(#{self.write_timeouts}); bytes not sent", flush=True)
+                return
+            except u.USBError:
+                self.io_errors += 1
+                if attempt == CTRL_RETRIES - 1:
+                    self.write_timeouts += 1
+                    print(f"[{self.name}] WRITE FAILED after {CTRL_RETRIES} USB "
+                          f"errors; bytes not sent", flush=True)
+                    return
+                time.sleep(0.01 * (attempt + 1))
         if self.echo_suppress:
             self._eat_echo(data)
 
