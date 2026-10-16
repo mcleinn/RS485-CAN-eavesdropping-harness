@@ -91,9 +91,8 @@ class ActionItem(ListItem):
 class RshTui(App):
     TITLE = "rs485harness"
     SUB_TITLE = "inverter <-> battery RS485 harness"
-    # Responsive: below 80 columns (phone in portrait) everything stacks
-    # vertically and the action list shows titles only.
-    HORIZONTAL_BREAKPOINTS = [(0, "-narrow"), (80, "-wide")]
+    # Responsive: in a portrait terminal (phone) everything stacks vertically
+    # and the action list shows titles only; see _apply_layout_class.
     CSS = """
     Screen { layout: vertical; }
     #top { height: auto; padding: 0 1; background: $surface; }
@@ -151,21 +150,62 @@ class RshTui(App):
         # Termux does not always deliver SIGWINCH to a process started through
         # termux-usb (rotating the phone left half the screen black): poll
         # the terminal size and raise the resize ourselves when it changes.
+        self._apply_layout_class(self.size.width, self.size.height)
         self.set_interval(0.5, self._poll_terminal_size)
+
+    def on_resize(self, event: events.Resize) -> None:
+        self._apply_layout_class(event.size.width, event.size.height)
+
+    def _apply_layout_class(self, cols: int, rows: int) -> None:
+        """Portrait (or just narrow) -> stacked layout. A phone in portrait
+        with a small font can exceed 80 columns, so judge by aspect ratio
+        too: side-by-side needs at least 100 columns and >= 1.8 cols/row."""
+        narrow = cols < 100 or cols < rows * 1.8
+        self.screen.set_class(narrow, "-narrow")
+        self.screen.set_class(not narrow, "-wide")
+        self._layout_mode = "stacked" if narrow else "side-by-side"
+        try:
+            self.set_status(self._status_text)
+        except Exception:
+            pass
         self.log_line(f"[b]rs485harness TUI[/b]  sessions -> {S.CAPTURE_DIR}")
         self.log_line("Pick an action (Enter), fill PORT first. "
                       "On Termux start via tools/termux/rsh-usb tui, then use usb:A / usb:B.")
         self.query_one("#actions", ListView).focus()
 
     # ----------------------------------------------------------- helpers
+    _status_text = "idle"
+    _layout_mode = "?"
+
+    @staticmethod
+    def _terminal_size() -> tuple[int, int] | None:
+        """Real terminal size: ask the controlling tty, not stdout (under
+        termux-usb stdout may be a pipe)."""
+        for fd_src in ("/dev/tty", None):
+            try:
+                if fd_src:
+                    fd = os.open(fd_src, os.O_RDONLY)
+                    try:
+                        cols, rows = os.get_terminal_size(fd)
+                    finally:
+                        os.close(fd)
+                else:
+                    cols, rows = os.get_terminal_size()
+                if cols > 0 and rows > 0:
+                    return cols, rows
+            except OSError:
+                continue
+        return None
+
     def _poll_terminal_size(self) -> None:
-        try:
-            cols, rows = os.get_terminal_size()
-        except OSError:
+        ts = self._terminal_size()
+        if ts is None:
             return
-        if (cols, rows) != (self.size.width, self.size.height) and cols > 0 and rows > 0:
+        cols, rows = ts
+        if (cols, rows) != (self.size.width, self.size.height):
             size = Size(cols, rows)
             self.post_message(events.Resize(size, size))
+            self._apply_layout_class(cols, rows)
             self.screen.refresh(layout=True)
 
     def log_line(self, text: str) -> None:
@@ -176,7 +216,9 @@ class RshTui(App):
         self.call_from_thread(self.log_line, line)
 
     def set_status(self, text: str) -> None:
-        self.query_one("#status", Static).update(text)
+        self._status_text = text
+        self.query_one("#status", Static).update(
+            f"{text}   [{self.size.width}x{self.size.height} {self._layout_mode}]")
 
     def _inputs(self) -> tuple[str, str, int]:
         port = self.query_one("#port", Input).value.strip()
