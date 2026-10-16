@@ -154,6 +154,7 @@ class RshTui(App):
         self._apply_layout_class(self.size.width, self.size.height)
         self.set_interval(0.5, self._poll_terminal_size)
         self.log_line(f"[dim]sessions -> {S.CAPTURE_DIR}[/dim]")
+        self._autofill_ports()
         self.query_one("#actions", ListView).focus()
 
     def on_resize(self, event: events.Resize) -> None:

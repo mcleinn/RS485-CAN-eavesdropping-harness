@@ -20,6 +20,10 @@ async def test_tui_mounts_lists_actions_and_runs_ports():
         await pilot.pause()
         log = app.query_one("#log", RichLog)
         assert len(log.lines) > 2
+        # autofill: whatever port enumeration found (if anything) is in PORT
+        from textual.widgets import Input
+        ports = app._list_ports()
+        assert app.query_one("#port", Input).value == (ports[0][0] if ports else "")
         # identify without a port must not start anything
         app.run_action_key("identify")
         await pilot.pause()
