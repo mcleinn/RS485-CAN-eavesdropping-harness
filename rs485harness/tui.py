@@ -301,8 +301,13 @@ class RshTui(App):
                                 "dump", "readout", "selftest"):
             self.log_line(f"[yellow]job {self.job['name']} is running - stop it first (s)[/yellow]")
             return
-        if key in ("identify", "discover", "dump", "readout", "sniff", "seplos") and not self._need_port(port):
+        if key in ("sniff", "seplos") and not self._need_port(port):
             return
+        if key in ("identify", "discover", "dump", "readout") and not port:
+            cands = self._adapter_ports()
+            if not cands:
+                self._need_port(port); return
+            port = "auto:" + ",".join(cands)
         if key == "selftest" and not (self._need_port(port) and self._need_port(port2)):
             return
         self.log_line(f"[b]{key}[/b] on {port}{' + ' + port2 if port2 else ''} @ {baud}")
@@ -310,10 +315,44 @@ class RshTui(App):
         self._run_blocking(key, port, port2, baud)
 
     # --- one-shot tools run in a worker thread; live jobs keep a handle
+    def _find_port(self, port: str, baud: int) -> str | None:
+        """'auto:a,b' -> run identify on each candidate, return the first one
+        with a responder (logs each attempt); plain port -> unchanged."""
+        if not port.startswith("auto:"):
+            return port
+        from .core.transport import open_link
+        from .analyzer.identify import identify
+        for cand in port[5:].split(","):
+            self._event(f"[b]trying {cand}[/b] ...")
+            try:
+                sess = S.SessionWriter(S.new_session_path("identify"))
+                link = open_link(cand, baud, name="id")
+                try:
+                    rep = identify(link, sess, listen_s=2.0, on_event=lambda l: None)
+                finally:
+                    link.close(); sess.close()
+            except Exception as e:
+                self._event(f"  {cand}: {e!r}")
+                continue
+            hits = [a for a in rep.get("active", []) if a.get("answered")]
+            heard = any(v.get("frames") for v in rep.get("passive", {}).values())
+            if hits or heard:
+                self._event(f"  [b]{cand} answers[/b] ({rep['verdicts'][0] if rep.get('verdicts') else ''})")
+                self.call_from_thread(lambda: setattr(self.query_one("#port", Input), "value", cand))
+                return cand
+            self._event(f"  {cand}: silence")
+        self._event("[red]no battery found on any port[/red] - check A/B wiring and that the battery is on")
+        return None
+
     @work(thread=True, exclusive=False)
     def _run_blocking(self, key: str, port: str, port2: str, baud: int) -> None:
         from .core.transport import open_link
         try:
+            if key in ("identify", "discover", "dump", "readout"):
+                found = self._find_port(port, baud)
+                if found is None:
+                    return
+                port = found
             if key == "identify":
                 from .analyzer.identify import identify
                 sess = S.SessionWriter(S.new_session_path("identify"))
@@ -422,27 +461,67 @@ class RshTui(App):
         self._event(format_dump(rep)); S.save_report(sess.path, rep, "dump"); sess.close()
         self._event(f"[b]done[/b] - files in {folder}")
 
-    def _do_ports(self) -> None:
-        import os
-        lines = []
+    def _list_ports(self) -> list[tuple[str, str]]:
+        """[(port spec, description)], real adapters first (FTDI/CH340/CP210x/
+        Prolific by hwid), Bluetooth and other virtual ports last."""
+        found: list[tuple[str, str, int]] = []
         if sys.platform != "android":
             try:
                 from serial.tools import list_ports
-                lines += [f"{p.device:10} {p.description} [{p.hwid}]" for p in list_ports.comports()]
+                for p in list_ports.comports():
+                    hw = (p.hwid or "").upper()
+                    if any(k in hw for k in ("VID:PID=0403", "VID:PID=1A86",
+                                             "VID:PID=10C4", "VID:PID=067B")):
+                        rank = 0
+                    elif "BTHENUM" in hw or "BLUETOOTH" in hw:
+                        rank = 2
+                    else:
+                        rank = 1
+                    found.append((p.device, f"{p.description} [{p.hwid}]", rank))
             except Exception as e:
-                lines.append(f"serial enumeration failed: {e}")
+                self.log_line(f"serial enumeration failed: {e}")
         fd = os.environ.get("RSH_USB_FD")
         if fd:
             try:
                 from .core.ftdi_usb import describe_device
                 d = describe_device(int(fd))
-                lines += [f"usb:{ch:9} {d['product']} channel {ch} (via termux-usb)"
+                found += [(f"usb:{ch}", f"{d['product']} channel {ch} (via termux-usb)", 0)
                           for ch in d["channels"]]
             except Exception as e:
-                lines.append(f"usb: {e}")
+                self.log_line(f"usb: {e}")
         elif sys.platform == "android":
-            lines.append("no USB fd: start the TUI via tools/termux/rsh-usb tui")
-        self.log_line("\n".join(lines) or "no ports found")
+            self.log_line("no USB device: start via rsh-tui / tools/termux/rsh-usb tui "
+                          "with the adapter plugged in")
+        found.sort(key=lambda t: t[2])
+        return [(dev, desc) for dev, desc, _ in found]
+
+    def _adapter_ports(self) -> list[str]:
+        """Candidate ports for auto mode: all channels of real adapters."""
+        ports = self._list_ports()
+        adapters = [d for d, desc in ports
+                    if d.startswith("usb:") or any(k in desc.upper() for k in
+                       ("VID:PID=0403", "VID:PID=1A86", "VID:PID=10C4", "VID:PID=067B"))]
+        return adapters or [d for d, _ in ports]
+
+    def _autofill_ports(self) -> None:
+        ports = self._list_ports()
+        if not ports:
+            self.log_line("no ports found")
+            return
+        self.log_line("ports: " + ", ".join(f"[b]{d}[/b] {desc}" for d, desc in ports))
+        port_in, port2_in = self.query_one("#port", Input), self.query_one("#port2", Input)
+        cands = self._adapter_ports()
+        if not port_in.value and len(cands) == 1:
+            port_in.value = cands[0]
+        elif not port_in.value:
+            port_in.placeholder = "auto: " + ", ".join(cands)
+            self.log_line(f"PORT empty = auto, tries {', '.join(cands)} in turn")
+        if not port2_in.value and len(cands) == 2 and cands[1].startswith("usb:"):
+            port2_in.value = cands[1]     # second channel of the same adapter (sniff/selftest)
+
+    def _do_ports(self) -> None:
+        ports = self._list_ports()
+        self.log_line(chr(10).join(f"{d:10} {desc}" for d, desc in ports) or "no ports found")
 
     def _do_timeline(self, path: str) -> None:
         from .analyzer.timeline import TimelineConfig, build_timeline, export, format_timeline
