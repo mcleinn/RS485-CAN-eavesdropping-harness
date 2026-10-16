@@ -6,7 +6,9 @@ Diagnoses why a battery BMS and an inverter that both claim to speak
 "RS485-Pylontech") link, but protocol- and device-agnostic by design.
 
 Windows-first, pure Python (pyserial + stdlib), runs unchanged on
-Linux/Raspberry Pi.
+Linux/Raspberry Pi and on Android in Termux without root (FTDI adapters
+driven over libusb from the descriptor `termux-usb` hands over; see
+`docs/USAGE.md`, "Android / Termux").
 
 ## What's inside
 
@@ -81,7 +83,7 @@ Linux/Raspberry Pi.
 
 ```
 pip install -e ".[dev]"
-python -m pytest          # 33 tests, all hardware-free
+python -m pytest          # 90 tests, all hardware-free
 rsh demo                  # sim inverter vs sim battery over loopback
 rsh menu                  # interactive runner (concurrent jobs per channel)
 rsh identify --port COM5  # first thing to run against a real device

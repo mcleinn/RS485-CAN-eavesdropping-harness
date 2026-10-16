@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import time
 
-from ..core.transport import SerialLink
+from ..core.transport import SerialLink, open_link
 from ..protocols.pylontech.frames import encode_frame
 
 GOLDEN_FRAME = bytes.fromhex("7E32303031343634324530303230314644"
@@ -66,8 +66,8 @@ def run_selftest(port1: str | None = None, port2: str | None = None,
         l1, l2 = links
     else:
         try:
-            l1 = SerialLink(port1, name="ch1")
-            l2 = SerialLink(port2, name="ch2")
+            l1 = open_link(port1, name="ch1")
+            l2 = open_link(port2, name="ch2")
         except Exception as e:  # serial.SerialException etc.
             report["passed"] = False
             report["error"] = f"could not open ports: {e}"

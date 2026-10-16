@@ -150,6 +150,49 @@ logged to the session JSONL like every other tool.
 Because scenarios are plain JSON, an LLM can generate and run them on the
 fly — this is the "hand the model the wire" surface.
 
+## Android / Termux (no root)
+
+The harness runs unchanged on a phone in Termux; only the serial transport
+differs. Android never exposes `/dev/ttyUSB*` to an app; it hands over one
+already-open USB file descriptor per device after the user taps "allow".
+`rs485harness/core/ftdi_usb.py` therefore drives FTDI chips (FT232R/X,
+FT232H, FT2232H = Waveshare 2CH, FT4232H) directly over libusb from that
+descriptor. Non-FTDI adapters (CH340, CP210x) are not supported on Android.
+
+Setup once (Termux from F-Droid/GitHub or the current Play build, plus the
+separate **Termux:API** app):
+
+```
+pkg install python libusb termux-api git openssh
+pip install libusb1 pyserial
+git clone <repo> ~/dev/inverter && cd ~/dev/inverter && pip install -e ".[dev]"
+python -m pytest -q            # 90 tests, hardware-free (~90 s on a phone)
+```
+
+Plug the adapter in through a real OTG adapter or USB-C hub (the phone must
+switch to host role; a charge/data cable without the CC resistor will not do
+it - the adapter's LED stays off). Then run any `rsh` command through the
+launcher, which asks Android for the device and passes the descriptor:
+
+```
+tools/termux/rsh-usb ports                       # usb:A, usb:B for a Waveshare 2CH
+tools/termux/rsh-usb identify --port usb:A
+tools/termux/rsh-usb sniff --ch1 usb:A --ch2 usb:B --quiet
+tools/termux/rsh-usb selftest usb:A usb:B        # A-A / B-B cross-wired
+RSH_USB_DEV=/dev/bus/usb/001/021 tools/termux/rsh-usb ports   # if several devices
+```
+
+Port specs: `usb:A` / `usb:B` (device from the launcher), or `usb:<fd>:A`
+when you obtained the descriptor yourself (`termux-usb -r -e`). What is
+different from a COM port: no automatic reopen after a USB re-enumeration
+(Android hands the descriptor over once; replug and restart), and the
+FTDI latency timer is set to 1 ms by the harness itself. Everything else
+(sessions, `timeline`, markers, simulators, bridge) is identical.
+
+Verified 2026-10-16 on a Pixel 7 Pro (Android 16): FT2232H opened via
+`termux-usb`, both channels claimed and configured. A Motorola Edge 60 Pro
+did not enter USB host mode with the adapters tried.
+
 ## Extending
 
 - New battery dialect quirk: add a `DialectProfile` in

@@ -12,12 +12,13 @@ Typical first commands:
 from __future__ import annotations
 
 import argparse
+import os
 import json
 import sys
 import time
 
 from .core import session as S
-from .core.transport import SerialLink, loopback_pair
+from .core.transport import SerialLink, loopback_pair, open_link
 from .protocols.pylontech import frames as F
 from .protocols.pylontech import payloads as P
 from .protocols.pylontech.dialects import (BATTERY_PROFILES, INVERTER_PROFILES,
@@ -64,6 +65,14 @@ def cmd_ports(args) -> int:
     from serial.tools import list_ports
     ports = [{"device": p.device, "description": p.description,
               "hwid": p.hwid} for p in list_ports.comports()]
+    fd = os.environ.get("RSH_USB_FD")
+    if fd:   # Android/Termux: the one device termux-usb handed us
+        from .core.ftdi_usb import describe_device
+        d = describe_device(int(fd))
+        for ch in d["channels"]:
+            ports.append({"device": f"usb:{ch}", "hwid": d["hwid"],
+                          "description": f"{d['product']} channel {ch} "
+                                         f"(fd {fd}, via termux-usb)"})
     human = "\n".join(f"{p['device']:8} {p['description']} [{p['hwid']}]"
                       for p in ports) or "no serial ports found"
     _print(args, human, {"ports": ports})
@@ -95,9 +104,8 @@ def cmd_decode(args) -> int:
     return 0 if pf.ok else 1
 
 
-def _open_serial(port: str, baud: int, name: str) -> SerialLink:
-    link = SerialLink(port, baud, name=name)
-    return link
+def _open_serial(port: str, baud: int, name: str):
+    return open_link(port, baud, name=name)
 
 
 def cmd_battery_sim(args) -> int:

@@ -1,0 +1,28 @@
+#!/data/data/com.termux/files/usr/bin/bash
+# Run any rsh command on Android/Termux with the FTDI adapter handed over by
+# termux-usb (no root). Port specs: usb:A, usb:B (Waveshare 2CH = FT2232H),
+# usb:A for single-port FTDI adapters.
+#
+#   rsh-usb ports
+#   rsh-usb identify --port usb:A
+#   rsh-usb sniff --ch1 usb:A --ch2 usb:B --quiet
+#   rsh-usb selftest usb:A usb:B
+#   RSH_USB_DEV=/dev/bus/usb/001/021 rsh-usb ports     # pick a device
+#
+# Requires: pkg install termux-api libusb python; pip install libusb1 pyserial;
+# the Termux:API app; and Android's USB permission dialog answered once per plug.
+set -e
+dev="${RSH_USB_DEV:-}"
+if [ -z "$dev" ]; then
+    list=$(termux-usb -l 2>/dev/null | tr -d '[]", ' | tr '\n' ' ')
+    set -- "$@"
+    n=$(echo $list | wc -w)
+    if [ "$n" -eq 0 ]; then echo "rsh-usb: no USB device visible to Termux (plug in via OTG, check Termux:API)" >&2; exit 1; fi
+    if [ "$n" -gt 1 ]; then echo "rsh-usb: several USB devices: $list - set RSH_USB_DEV" >&2; exit 1; fi
+    dev=$(echo $list)
+fi
+cd "$(dirname "$(readlink -f "$0")")/../.." 2>/dev/null || true
+# termux-usb appends the fd as the last argument of the command string
+cmd="python -m rs485harness.termux_exec"
+for a in "$@"; do cmd="$cmd $(printf '%q' "$a")"; done
+exec termux-usb -r -e "$cmd" "$dev"

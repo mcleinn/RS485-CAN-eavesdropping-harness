@@ -289,10 +289,14 @@ def loopback_pair(name_a: str = "simA", name_b: str = "simB",
 
 
 def open_link(spec: str, baud: int = 9600, name: str | None = None) -> Link:
-    """spec = COM port / /dev/tty path. 'LOOP' is handled by callers that
-    own a loopback pair; here it is an error."""
+    """spec = COM port / /dev/tty path / 'usb:A' (FTDI over libusb, see
+    core/ftdi_usb.py). 'LOOP' is handled by callers that own a loopback
+    pair; here it is an error."""
     if spec.upper() == "LOOP":
         raise ValueError("LOOP links must be created via loopback_pair()")
+    if spec.lower().startswith("usb:"):
+        from .ftdi_usb import FtdiUsbLink   # Android/Termux: FTDI over libusb
+        return FtdiUsbLink(spec, baud, name=name)
     return SerialLink(spec, baud, name=name)
 
 

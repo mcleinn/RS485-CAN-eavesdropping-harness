@@ -13,7 +13,7 @@ import time
 from pathlib import Path
 
 from .core import session as S
-from .core.transport import SerialLink, loopback_pair
+from .core.transport import SerialLink, loopback_pair, open_link
 from .protocols.pylontech.dialects import BATTERY_PROFILES, INVERTER_PROFILES
 from .simulators.battery_state import preset, PRESETS, apply_overrides
 from .simulators.battery_sim import BatterySimulator
@@ -170,7 +170,7 @@ class Menu:
         self.cfg.update(battery_profile=prof, battery_preset=pre)
         save_config(self.cfg)
         sess = S.SessionWriter(S.new_session_path("battery-sim"))
-        link = SerialLink(port, BATTERY_PROFILES[prof].baud, name="battery")
+        link = open_link(port, BATTERY_PROFILES[prof].baud, name="battery")
         sim = BatterySimulator(link, state, BATTERY_PROFILES[prof], sess,
                                on_event=self.on_event_for(f"bat@{port}"))
         job = Job(f"battery-sim[{prof}]@{port}", sim.run, sim.stop_event.set,
@@ -190,7 +190,7 @@ class Menu:
         self.cfg.update(inverter_profile=prof)
         save_config(self.cfg)
         sess = S.SessionWriter(S.new_session_path("inverter-sim"))
-        link = SerialLink(port, INVERTER_PROFILES[prof].baud, name="inverter")
+        link = open_link(port, INVERTER_PROFILES[prof].baud, name="inverter")
         sim = InverterSimulator(link, INVERTER_PROFILES[prof], sess,
                                 on_event=self.on_event_for(f"inv@{port}"))
         job = Job(f"inverter-sim[{prof}]@{port}", sim.run, sim.stop_event.set,
@@ -205,7 +205,7 @@ class Menu:
             return
         passive = self.ask("passive only (no transmitting)? y/N", "n").lower() == "y"
         sess = S.SessionWriter(S.new_session_path("identify"))
-        link = SerialLink(port, 9600, name="id")
+        link = open_link(port, 9600, name="id")
         print("identify running (blocks this menu; other jobs keep running) ...")
         report = identify(link, sess, active=not passive,
                           on_event=lambda l: print("  " + l, flush=True))
@@ -225,7 +225,7 @@ class Menu:
             return
         baud = int(self.ask("baud", "9600"))
         sess = S.SessionWriter(S.new_session_path("discover"))
-        link = SerialLink(port, baud, name="disc")
+        link = open_link(port, baud, name="disc")
         print("discovery running (blocks this menu; other jobs keep "
               "running) ...")
         report = discover(link, sess,
@@ -245,7 +245,7 @@ class Menu:
             return
         baud = int(self.ask("baud", "115200"))
         sess = S.SessionWriter(S.new_session_path("soc"))
-        link = SerialLink(port, baud, name="soc")
+        link = open_link(port, baud, name="soc")
         data = used = None
         for adr in (2, 0, 1, 0x12):
             pf, _ = _probe_pylontech(link, 0x20, adr, 0x42, "FF",
@@ -276,7 +276,7 @@ class Menu:
         adrs_in = self.ask("addresses comma-sep (empty = scan 0..7)", "")
         adrs = [int(a, 0) for a in adrs_in.split(",")] if adrs_in else None
         sess = S.SessionWriter(S.new_session_path("dump"))
-        link = SerialLink(port, baud, name="dump")
+        link = open_link(port, baud, name="dump")
         print("dumping (blocks menu) ...")
         report = dump_stack(link, sess, adrs=adrs,
                             on_event=lambda l: print(l, flush=True))
@@ -295,9 +295,9 @@ class Menu:
         self.cfg["sniff_baud"] = baud
         save_config(self.cfg)
         sess = S.SessionWriter(S.new_session_path("sniff"))
-        links = {"ch1": SerialLink(p1, baud, name="ch1")}
+        links = {"ch1": open_link(p1, baud, name="ch1")}
         if p2 and p2 != p1:
-            links["ch2"] = SerialLink(p2, baud, name="ch2")
+            links["ch2"] = open_link(p2, baud, name="ch2")
         sn = Sniffer(links, sess, on_event=self.on_event_for("sniff"))
         job = Job(f"sniff@{p1}{'+' + p2 if p2 and p2 != p1 else ''}",
                   sn.run, sn.stop, sess.path, links=tuple(links.values()))
@@ -330,8 +330,8 @@ class Menu:
             except ValueError as e:
                 print(f"  {e}"); return
         sess = S.SessionWriter(S.new_session_path("bridge"))
-        a = SerialLink(p1, baud, name="ch1")
-        b = SerialLink(p2, baud, name="ch2")
+        a = open_link(p1, baud, name="ch1")
+        b = open_link(p2, baud, name="ch2")
         br = Bridge(a, b, sess, translator=tr,
                     on_event=self.on_event_for("bridge"))
         print(f"  MODE={br.mode}" + (f" [{tr.describe()}]" if tr else ""))
@@ -358,7 +358,7 @@ class Menu:
                     "cid2": cid2, "info": self.ask("INFO hex", "")}
             expect = cid2
         sess = S.SessionWriter(S.new_session_path("send"))
-        link = SerialLink(port, baud, name="send")
+        link = open_link(port, baud, name="send")
         try:
             frame = build_frame(spec)
         except Exception as e:
@@ -402,7 +402,7 @@ class Menu:
             print(f"  {e}"); return
         baud = sc.get("baud", 9600)
         sess = S.SessionWriter(S.new_session_path("script"))
-        link = SerialLink(port, baud, name="script")
+        link = open_link(port, baud, name="script")
         dur = None
         if sc.get("mode") == "responder":
             d = self.ask("responder duration seconds (empty=until stop)", "")
