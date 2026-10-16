@@ -19,7 +19,7 @@
 # the raw session log, and summary.txt. Everything read-only.
 set -u
 PORT="${1:-usb:A}"
-BAUD="${BAUD:-9600}"
+BAUD="${BAUD:-}"            # empty = detect (Pylontech 115200, Dyness/Seplos 9600, ...)
 HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
 REPO="${RSH_REPO:-$HOME/dev/inverter}"
 [ -d "$REPO/rs485harness" ] || REPO="$HERE/../.."
@@ -33,9 +33,23 @@ case "$PORT" in
 esac
 
 log() { echo "$*" | tee -a "$OUT/summary.txt"; }
-log "== battery readout $(date)  port=$PORT baud=$BAUD"
-log "== 1/3 who is there (passive 5 s, then active probes)"
-$RSH identify --port "$PORT" --bauds "$BAUD" --listen 5 --session "$OUT/identify.jsonl" 2>&1 | tee -a "$OUT/summary.txt" | tail -6
+log "== battery readout $(date)  port=$PORT baud=${BAUD:-auto}"
+log "== 1/3 who is there (passive listen, then active probes at every baud)"
+if [ -n "$BAUD" ]; then BAUDARG="--bauds $BAUD"; else BAUDARG=""; fi
+$RSH identify --port "$PORT" $BAUDARG --listen 3 --session "$OUT/identify.jsonl" 2>&1 | tee -a "$OUT/summary.txt" | tail -6
+if [ -z "$BAUD" ]; then
+  BAUD=$(python - "$OUT/identify.identify.json" <<'PY'
+import json, sys
+try:
+    r = json.load(open(sys.argv[1], encoding="utf-8"))
+    hits = [a for a in r.get("active", []) if a.get("answered")]
+    print(hits[0]["baud"] if hits else 9600)
+except Exception:
+    print(9600)
+PY
+)
+  log "detected baud: $BAUD"
+fi
 log "== 2/3 discovery: every command, decoded state, quirks"
 $RSH discover --port "$PORT" --baud "$BAUD" --session "$OUT/discover.jsonl" 2>&1 | tee -a "$OUT/summary.txt" | tail -25
 log "== 3/3 dump: all units, every cell/temperature/limit, cycles, serial, firmware"

@@ -304,12 +304,16 @@ class RshTui(App):
         sess = S.SessionWriter(folder / "identify.jsonl")
         link = open_link(port, baud, name="id")
         try:
-            rep = identify(link, sess, on_event=self._event)
+            rep = identify(link, sess, listen_s=3.0, on_event=self._event)
         finally:
             link.close()
         for v in rep["verdicts"]:
             self._event(f"  [b]* {v}[/b]")
         S.save_report(sess.path, rep, "identify"); sess.close()
+        hits = [a for a in rep.get("active", []) if a.get("answered")]
+        if hits and int(hits[0]["baud"]) != baud:
+            baud = int(hits[0]["baud"])
+            self._event(f"[b]using detected baud {baud}[/b]")
         sess = S.SessionWriter(folder / "discover.jsonl")
         link = open_link(port, baud, name="disc")
         try:
