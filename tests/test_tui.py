@@ -47,3 +47,23 @@ async def test_tui_adapts_to_narrow_and_wide_terminals():
         assert actions.region.x < log.region.x                # side by side
         assert actions.region.width + log.region.width <= 120
         await pilot.press("q")
+
+
+@pytest.mark.asyncio
+async def test_log_does_not_duplicate_on_resize():
+    from textual import events
+    from textual.geometry import Size
+    app = RshTui()
+    async with app.run_test(size=(60, 50)) as pilot:
+        await pilot.pause()
+        app.log_line("one"); app.log_line("two"); await pilot.pause()
+        log = app.query_one("#log", RichLog)
+        n = len(log.lines)
+        for _ in range(3):
+            app.post_message(events.Resize(Size(60, 50), Size(60, 50))); await pilot.pause()
+        await pilot.resize_terminal(100, 40); await pilot.pause()
+        await pilot.resize_terminal(60, 50); await pilot.pause()
+        for _ in range(3):
+            app._poll_terminal_size(); await pilot.pause()
+        assert len(log.lines) == n
+        await pilot.press("q")

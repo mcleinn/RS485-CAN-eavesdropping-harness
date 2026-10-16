@@ -125,6 +125,7 @@ class RshTui(App):
     def __init__(self, port: str = "", port2: str = "", baud: int = 9600):
         super().__init__()
         self._port0, self._port20, self._baud0 = port, port2, baud
+        self._log_lines = []
         self.job: dict | None = None       # {"name", "stop", "links", "thread"}
 
     # ----------------------------------------------------------- layout
@@ -152,9 +153,21 @@ class RshTui(App):
         # the terminal size and raise the resize ourselves when it changes.
         self._apply_layout_class(self.size.width, self.size.height)
         self.set_interval(0.5, self._poll_terminal_size)
+        self.log_line(f"[dim]sessions -> {S.CAPTURE_DIR}[/dim]")
+        self.query_one("#actions", ListView).focus()
 
     def on_resize(self, event: events.Resize) -> None:
         self._apply_layout_class(event.size.width, event.size.height)
+        # RichLog(wrap=True) appends a re-wrapped copy of its content on every
+        # resize (Textual 8.2); rebuild it from our own line list once the
+        # widget has handled the resize itself.
+        self.call_after_refresh(self._rebuild_log)
+
+    def _rebuild_log(self) -> None:
+        log = self.query_one("#log", RichLog)
+        log.clear()
+        for line in self._log_lines:
+            log.write(line)
 
     def _apply_layout_class(self, cols: int, rows: int) -> None:
         """Portrait (or just narrow) -> stacked layout. A phone in portrait
@@ -168,10 +181,6 @@ class RshTui(App):
             self.set_status(self._status_text)
         except Exception:
             pass
-        self.log_line(f"[b]rs485harness TUI[/b]  sessions -> {S.CAPTURE_DIR}")
-        self.log_line("Pick an action (Enter), fill PORT first. "
-                      "On Termux start via tools/termux/rsh-usb tui, then use usb:A / usb:B.")
-        self.query_one("#actions", ListView).focus()
 
     # ----------------------------------------------------------- helpers
     _status_text = "idle"
@@ -202,13 +211,24 @@ class RshTui(App):
         if ts is None:
             return
         cols, rows = ts
-        if (cols, rows) != (self.size.width, self.size.height):
-            size = Size(cols, rows)
-            self.post_message(events.Resize(size, size))
-            self._apply_layout_class(cols, rows)
-            self.screen.refresh(layout=True)
+        if (cols, rows) == (self.size.width, self.size.height):
+            self._last_posted_size = None
+            return
+        if (cols, rows) == self._last_posted_size:
+            return                      # already raised, driver disagrees; don't spam
+        self._last_posted_size = (cols, rows)
+        size = Size(cols, rows)
+        self.post_message(events.Resize(size, size))
+        self.screen.refresh(layout=True)
+
+    LOG_KEEP = 2000
+    _log_lines: list[str] = []
+    _last_posted_size: tuple[int, int] | None = None
 
     def log_line(self, text: str) -> None:
+        self._log_lines.append(text)
+        if len(self._log_lines) > self.LOG_KEEP:
+            del self._log_lines[: len(self._log_lines) - self.LOG_KEEP]
         self.query_one("#log", RichLog).write(text)
 
     def _event(self, line: str) -> None:
@@ -246,6 +266,7 @@ class RshTui(App):
             self.run_action_key(lv.highlighted_child.key)
 
     def action_clear_log(self) -> None:
+        self._log_lines.clear()
         self.query_one("#log", RichLog).clear()
 
     def action_cycle_theme(self) -> None:
