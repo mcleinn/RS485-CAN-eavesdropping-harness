@@ -9,6 +9,7 @@ c clears the log, t cycles the theme, q quits. Touch/mouse works too.
 """
 from __future__ import annotations
 
+import os
 import sys
 import threading
 import time
@@ -17,8 +18,9 @@ from pathlib import Path
 from .core import session as S
 
 try:
-    from textual import on, work
+    from textual import events, on, work
     from textual.app import App, ComposeResult
+    from textual.geometry import Size
     from textual.binding import Binding
     from textual.containers import Horizontal, Vertical
     from textual.theme import Theme
@@ -89,6 +91,9 @@ class ActionItem(ListItem):
 class RshTui(App):
     TITLE = "rs485harness"
     SUB_TITLE = "inverter <-> battery RS485 harness"
+    # Responsive: below 80 columns (phone in portrait) everything stacks
+    # vertically and the action list shows titles only.
+    HORIZONTAL_BREAKPOINTS = [(0, "-narrow"), (80, "-wide")]
     CSS = """
     Screen { layout: vertical; }
     #top { height: auto; padding: 0 1; background: $surface; }
@@ -100,6 +105,15 @@ class RshTui(App):
     #actions > ListItem.-highlight { background: $primary 25%; }
     #log { width: 1fr; border: tall $secondary; background: $background; }
     #status { height: 1; padding: 0 1; background: $panel; color: $accent; }
+
+    Screen.-narrow #top { layout: vertical; padding: 0; }
+    Screen.-narrow #top Label { display: none; }
+    Screen.-narrow #top Input { width: 1fr; }
+    Screen.-narrow #main { layout: vertical; }
+    Screen.-narrow #actions { width: 1fr; height: 12; }
+    Screen.-narrow #actions > ListItem { padding: 0 1; height: 1; }
+    Screen.-narrow .hint { display: none; }
+    Screen.-narrow #log { width: 1fr; height: 1fr; }
     """
     BINDINGS = [
         Binding("q", "quit", "Quit"),
@@ -134,12 +148,26 @@ class RshTui(App):
         self.register_theme(CLAUDE_DARK)
         self.register_theme(CLAUDE_LIGHT)
         self.theme = "claude"
+        # Termux does not always deliver SIGWINCH to a process started through
+        # termux-usb (rotating the phone left half the screen black): poll
+        # the terminal size and raise the resize ourselves when it changes.
+        self.set_interval(0.5, self._poll_terminal_size)
         self.log_line(f"[b]rs485harness TUI[/b]  sessions -> {S.CAPTURE_DIR}")
         self.log_line("Pick an action (Enter), fill PORT first. "
                       "On Termux start via tools/termux/rsh-usb tui, then use usb:A / usb:B.")
         self.query_one("#actions", ListView).focus()
 
     # ----------------------------------------------------------- helpers
+    def _poll_terminal_size(self) -> None:
+        try:
+            cols, rows = os.get_terminal_size()
+        except OSError:
+            return
+        if (cols, rows) != (self.size.width, self.size.height) and cols > 0 and rows > 0:
+            size = Size(cols, rows)
+            self.post_message(events.Resize(size, size))
+            self.screen.refresh(layout=True)
+
     def log_line(self, text: str) -> None:
         self.query_one("#log", RichLog).write(text)
 

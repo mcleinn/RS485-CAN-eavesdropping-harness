@@ -28,3 +28,22 @@ async def test_tui_mounts_lists_actions_and_runs_ports():
         await pilot.press("t")
         assert app.theme == "claude-light"
         await pilot.press("q")
+
+
+@pytest.mark.asyncio
+async def test_tui_adapts_to_narrow_and_wide_terminals():
+    app = RshTui()
+    async with app.run_test(size=(48, 60)) as pilot:        # phone, portrait
+        await pilot.pause()
+        assert app.screen.has_class("-narrow")
+        actions = app.query_one("#actions")
+        log = app.query_one("#log")
+        assert actions.region.width == log.region.width       # stacked
+        assert actions.region.y < log.region.y
+        await pilot.resize_terminal(120, 40)                  # rotated
+        await pilot.pause()
+        assert app.screen.has_class("-wide") and not app.screen.has_class("-narrow")
+        actions = app.query_one("#actions"); log = app.query_one("#log")
+        assert actions.region.x < log.region.x                # side by side
+        assert actions.region.width + log.region.width <= 120
+        await pilot.press("q")
