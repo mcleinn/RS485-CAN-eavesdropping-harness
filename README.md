@@ -78,14 +78,24 @@ driven over libusb from the descriptor `termux-usb` hands over; see
 - **Adapter self-test** for the real Waveshare (ch1+ch2 cross-wired).
 - **Sessions**: everything on the wire lands in timestamped JSONL under
   `captures/` — decoded, error-annotated, LLM-friendly.
+- **TUI** (`rsh tui`, Textual, Claude colour scheme): full-screen interactive
+  front end for the core functions — ports, identify, discover, dump,
+  one-shot battery check, sniff, Seplos monitor, timeline, self-test — with
+  a live log and job control; runs on Windows, Linux and in Termux
+  (`rsh-tui` there, adapter via `termux-usb`).
+- **Battery pre-purchase check**: `tools/termux/battery-readout.sh` (or the
+  TUI's "Battery check") runs identify + discover + dump into one folder:
+  cells, temperatures, cycles, serial, firmware, limits, alarms. Dyness
+  DL-series dialect simulated and tested (`--profile dyness-dl`).
 
 ## Install & first steps
 
 ```
 pip install -e ".[dev]"
-python -m pytest          # 90 tests, all hardware-free
+python -m pytest          # 93 tests, all hardware-free
 rsh demo                  # sim inverter vs sim battery over loopback
 rsh menu                  # interactive runner (concurrent jobs per channel)
+rsh tui                   # full-screen UI (pip install -e ".[tui]")
 rsh identify --port COM5  # first thing to run against a real device
 ```
 

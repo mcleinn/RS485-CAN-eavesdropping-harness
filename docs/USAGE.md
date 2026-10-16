@@ -150,6 +150,19 @@ logged to the session JSONL like every other tool.
 Because scenarios are plain JSON, an LLM can generate and run them on the
 fly — this is the "hand the model the wire" surface.
 
+## Full-screen UI (`rsh tui`)
+
+`pip install -e ".[tui]"` (adds Textual), then `rsh tui [--port COM5]`.
+Left: the actions (Enter runs the highlighted one; touch works in Termux).
+Top: PORT, PORT2, BAUD. Right: live log fed by the same `on_event`
+callbacks the CLI prints. Keys: `s` stop the running sniff/monitor,
+`c` clear log, `t` light/dark Claude theme, `q` quit. Every action writes
+the usual session files under `captures/`; "Battery check" writes a
+dated folder under `captures/battery-checks/`.
+
+On the phones: `rsh-tui` (= `tools/termux/rsh-usb tui`, so the adapter
+descriptor is in place and `usb:A`/`usb:B` work).
+
 ## Pre-purchase battery check (Pylontech-protocol packs, e.g. Dyness DL5.0C Pro)
 
 What one `tools/termux/battery-readout.sh` run (or the same three commands
@@ -220,8 +233,20 @@ FTDI latency timer is set to 1 ms by the harness itself. Everything else
 (sessions, `timeline`, markers, simulators, bridge) is identical.
 
 Verified 2026-10-16 on a Pixel 7 Pro (Android 16): FT2232H opened via
-`termux-usb`, both channels claimed and configured. A Motorola Edge 60 Pro
-did not enter USB host mode with the adapters tried.
+`termux-usb`, both channels claimed, configured and read error-free
+(2000 bulk reads, 0 errors) - after replacing the Waveshare's USB cable;
+the original cable caused re-enumeration every few seconds and bursts of
+USB I/O errors (the same cable caused the drop-outs on the notebook). A
+Motorola Edge 60 Pro did not enter USB host mode with the adapters tried.
+The transport rides through transient USB errors and uses a 4 ms latency
+timer; one `USBErrorIO` burst no longer ends a session.
+
+What is installed on the phones (Termux, `~/bin` on PATH):
+`rsh-usb <cmd>` and `rsh-tui` (harness with the adapter), `battery-readout.sh`
+(home directory), `claude` and `opencode` (both run inside a proot Alpine
+container because neither ships an Android build; Termux home is visible
+there as `/root/termux-home`; first run asks for login).
+
 
 ## Extending
 

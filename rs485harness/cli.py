@@ -904,6 +904,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("menu", help="interactive human test runner")
     p.set_defaults(fn=None)
+    p = sub.add_parser("tui", help="full-screen interactive UI for the core "
+                                   "functions (Textual; pip install textual)")
+    p.add_argument("--port", default="", help="pre-fill PORT (COM5, /dev/ttyUSB0, usb:A)")
+    p.add_argument("--port2", default="", help="pre-fill PORT2")
+    p.add_argument("--baud", type=int, default=9600)
+    p.set_defaults(fn=None)
     return ap
 
 
@@ -912,6 +918,9 @@ def main(argv=None) -> int:
     if args.cmd == "menu":
         from .runner import run_menu
         return run_menu()
+    if args.cmd == "tui":
+        from .tui import run_tui
+        return run_tui(args.port, args.port2, args.baud)
     return args.fn(args)
 
 
