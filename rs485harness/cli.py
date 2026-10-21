@@ -68,16 +68,45 @@ def cmd_ports(args) -> int:
         ports = [{"device": p.device, "description": p.description,
                   "hwid": p.hwid} for p in list_ports.comports()]
     fd = os.environ.get("RSH_USB_FD")
+    can_ports: list[dict] = []
     if fd:   # Android/Termux: the one device termux-usb handed us
-        from .core.ftdi_usb import describe_device
-        d = describe_device(int(fd))
-        for ch in d["channels"]:
-            ports.append({"device": f"usb:{ch}", "hwid": d["hwid"],
-                          "description": f"{d['product']} channel {ch} "
-                                         f"(fd {fd}, via termux-usb)"})
-    human = "\n".join(f"{p['device']:8} {p['description']} [{p['hwid']}]"
-                      for p in ports) or "no serial ports found"
-    _print(args, human, {"ports": ports})
+        from .core.gs_usb import describe_fd_device
+        ident = describe_fd_device(int(fd))
+        if ident["kind"] == "ftdi":
+            from .core.ftdi_usb import describe_device
+            d = describe_device(int(fd))
+            for ch in d["channels"]:
+                ports.append({"device": f"usb:{ch}", "hwid": d["hwid"],
+                              "description": f"{d['product']} channel {ch} "
+                                             f"(fd {fd}, via termux-usb)"})
+        elif ident["kind"] == "gs_usb":
+            from .core.canbus import CanSpec
+            from .core.gs_usb import GsUsbDevice
+            dev = GsUsbDevice.get(CanSpec("gs", f"fd{fd}", 0))
+            info = dev.describe()
+            dev.close()
+            for ch in range(info["channels"]):
+                can_ports.append({"device": f"can:gs:.{ch}", "hwid": info["hwid"],
+                                  "kind": "can",
+                                  "description": f"{info['product']} channel {ch} "
+                                                 f"(fd {fd}, via termux-usb)"})
+        else:
+            ports.append({"device": f"(fd {fd})", "hwid": ident["hwid"],
+                          "description": f"unsupported USB device ({ident['kind']})"})
+    else:
+        from .core.gs_usb import list_can_adapters
+        can_ports = list_can_adapters()
+    lines = [f"{p['device']:8} {p['description']} [{p['hwid']}]" for p in ports]
+    if not lines:
+        lines = ["no serial ports found"]
+    real_can = [p for p in can_ports if p.get("kind") != "note"]
+    if real_can or args.json:
+        lines.append("CAN:")
+        lines += [f"  {p['device']:14} {p['description']} [{p['hwid']}]" for p in real_can]
+    for p in can_ports:
+        if p.get("kind") == "note":
+            lines.append(f"  note: {p['description']}")
+    _print(args, "\n".join(lines), {"ports": ports, "can": can_ports})
     return 0
 
 

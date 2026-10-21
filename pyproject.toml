@@ -3,11 +3,12 @@ name = "rs485harness"
 version = "0.1.0"
 description = "RS485 test harness for inverter/BMS protocols (Pylontech ASCII, Voltronic, Seplos): analyzer, bridge, simulators"
 requires-python = ">=3.11"
-dependencies = ["pyserial>=3.5"]
+dependencies = ["pyserial>=3.5", "libusb1>=3.0"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.23", "textual>=8"]
 tui = ["textual>=8"]
+can-extra = ["python-can>=4.3"]   # socketcan / slcan / pcan backends; gs_usb is built in
 
 [project.scripts]
 rsh = "rs485harness.cli:main"

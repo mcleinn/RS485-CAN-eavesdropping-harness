@@ -288,16 +288,29 @@ def loopback_pair(name_a: str = "simA", name_b: str = "simB",
     return a, b
 
 
-def open_link(spec: str, baud: int = 9600, name: str | None = None) -> Link:
+def open_link(spec: str, baud: int = 9600, name: str | None = None,
+              listen_only: bool = False):
     """spec = COM port / /dev/tty path / 'usb:A' (FTDI over libusb, see
-    core/ftdi_usb.py). 'LOOP' is handled by callers that own a loopback
+    core/ftdi_usb.py) / 'can:...' (CAN adapters, see core/canbus.py - the
+    result is then a CanLink, not a byte-stream Link; commands check
+    `is_can_link()` once and run their CAN variant). For CAN specs `baud`
+    is taken as the bitrate when it looks like one (>= 10 kbit/s), else the
+    CAN default applies. 'LOOP' is handled by callers that own a loopback
     pair; here it is an error."""
     if spec.upper() == "LOOP":
         raise ValueError("LOOP links must be created via loopback_pair()")
+    if spec.lower().startswith("can:"):
+        from .canbus import open_can_link, looks_like_bitrate
+        return open_can_link(spec, baud if looks_like_bitrate(baud) else None,
+                             listen_only=listen_only, name=name)
     if spec.lower().startswith("usb:"):
         from .ftdi_usb import FtdiUsbLink   # Android/Termux: FTDI over libusb
         return FtdiUsbLink(spec, baud, name=name)
     return SerialLink(spec, baud, name=name)
+
+
+def is_can_link(link) -> bool:
+    return bool(getattr(link, "is_can", False))
 
 
 @dataclass
