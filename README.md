@@ -107,7 +107,7 @@ rsh identify --port COM5  # first thing to run against a real device
 - `docs/CHARGE-TAPER-PLAN.md` — the Seplos↔SAKO charge-rebound
   investigation: hypotheses, capability map, Phase-1 capture plan,
   Phase-2 policy principle and fail-safes
-- `docs/CAN-PLAN.md` — CAN bus: adapter recommendations (PC/Pi/phones), wiring, tap + decoder + gateway plan
+- `docs/CAN-PLAN.md` — CAN bus: the USBCANFD DUAL adapter and its firmwares, bus parameters of Huawei R48xx / Pylontech / Victron / Dyness / LuxPower, the integration plan (same commands, protocol by port kind), first test = Huawei R4850G2 control
 - `docs/USAGE.md` — tool reference + diagnosis strategy/playbook
 - `docs/PROTOCOL-NOTES.md` — condensed protocol ground truth (frame format,
   checksums, both command families, payload layouts, addressing quirks,
