@@ -23,6 +23,18 @@ driven over libusb from the descriptor `termux-usb` hands over; see
 - **Read a Pylontech stack**: `soc` (quick per-pack SOC/V/I table via one
   all-packs poll) and `dump` (complete per-unit state — every cell voltage,
   temps, limits, firmware, serial — to JSON for later analysis).
+- **CAN bus** (same commands, protocol by port kind): `can:gs:0` /
+  `can:gs:0.1` open the USBCANFD DUAL (own gs_usb client on libusb1,
+  listen-only taps, both channels, Windows/Linux/Android), `can:virtual:<name>`
+  an in-process bus; `rsh ports` lists CAN adapters, `rsh identify --port
+  can:gs:0` sweeps 500/250/125 kbit/s listen-only and names what talks
+  (Huawei R48xx PSU, Pylontech-CAN battery, inverter keep-alive, wrong
+  bitrate). **`rsh huawei`** controls a Huawei R4850G2/R48xx rectifier:
+  `status`, `info`, `calibrate-current` (the disputed current scale is
+  measured per unit, never assumed), `set` (dry run unless `--apply`,
+  hard caps in `.rsh-config.json`, verified by measurement), `hold`
+  (keep-alive loop), `sim` (bench substitute). Plan and references:
+  `docs/CAN-PLAN.md`.
 - **Discover** ("what do they offer?"): full inventory of a responder —
   every command classified supported/unsupported/error/silent, all
   payloads decoded into a state snapshot, dialect quirks flagged; Modbus
@@ -92,11 +104,16 @@ driven over libusb from the descriptor `termux-usb` hands over; see
 
 ```
 pip install -e ".[dev]"
-python -m pytest          # 93 tests, all hardware-free
+python -m pytest          # 143 tests, all hardware-free
 rsh demo                  # sim inverter vs sim battery over loopback
 rsh menu                  # interactive runner (concurrent jobs per channel)
 rsh tui                   # full-screen UI (pip install -e ".[tui]")
 rsh identify --port COM5  # first thing to run against a real device
+rsh ports                 # also lists CAN adapters (can:gs:0.0 / can:gs:0.1)
+rsh identify --port can:gs:0 --passive-only   # CAN: who talks, at which bitrate
+rsh huawei caps --voltage-max 55.2 --current-max 20   # hard caps before any set
+rsh huawei status --port can:gs:0             # R4850G2: decoded status burst
+rsh huawei set --port can:gs:0 --voltage 52.5 # dry run; add --apply to send
 ```
 
 ## Documentation

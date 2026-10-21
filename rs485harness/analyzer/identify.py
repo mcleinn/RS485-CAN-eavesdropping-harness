@@ -161,6 +161,10 @@ def identify(link: Link, session: SessionWriter, chan: str = "id",
              bauds=DEFAULT_BAUDS, adrs=DEFAULT_ADRS, vers=DEFAULT_VERS,
              on_event=None) -> dict:
     on_event = on_event or (lambda line: None)
+    if getattr(link, "is_can", False):
+        from .identify_can import identify_can
+        return identify_can(link, session, chan, listen_s=listen_s, active=active,
+                            on_event=on_event)
     can_baud = isinstance(link, SerialLink)
     baud_list = list(bauds) if can_baud else [None]
     report: dict = {"channel": chan, "link": link.name, "passive": {},

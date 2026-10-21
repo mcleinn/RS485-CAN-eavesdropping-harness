@@ -292,3 +292,27 @@ waits on documentation.
   so the adapter end needs the 120 Ω.
 - Keep VE.Can (29-bit, 250 k) and BMS-Can (11-bit, 500 k) on separate buses;
   on a Cerbo GX the port profile decides which one a socket is.
+
+## 6. Status
+
+| step | state | where |
+|---|---|---|
+| 1 core | **done 2026-10-21** (`132a3e1`): `core/canbus.py`, `core/gs_usb.py`, virtual bus with ACK model, `can:` specs in `open_link`, `rsh ports` CAN section, session records `kind="can"`, 28 tests | `tests/test_canbus.py` |
+| 2 Huawei | **done 2026-10-21** (code; bench test pending): `protocols/huawei_r48xx/{ids,regs}.py`, `simulators/huawei_psu_sim.py`, `analyzer/huawei.py`, `analyzer/identify_can.py` (identify's CAN branch), `rsh huawei status/info/calibrate-current/set/hold/caps/sim`, 20 tests | `tests/test_huawei.py` |
+| 3 battery dialects | not started | |
+| 4 gateway | not started | |
+| 5 Android | not started (the gs_usb client already takes the termux-usb fd: `can:gs:.0`) | |
+
+Finding from the simulator work (3.6 calibrate-current): on a 50-52 A unit
+the `ratio1024` scale is A x 1024/52 = A x 19.7, i.e. the same as `x20`
+within 1.5 % - that is why the sources disagree without anyone being
+wrong. `calibrate-current` therefore reports the *equivalence class* of
+scales the unit cannot tell apart; only `x30` (1.5x off on such a unit)
+is really distinguishable. On a 35 A unit the roles swap (ratio1024 =
+x29.3 = `x30`).
+
+Bench run order for step 2 (unchanged from 3.6): `rsh ports` ->
+`rsh identify --port can:gs:0 --passive-only` (expect the 0x1001117E
+heartbeat) -> `rsh huawei caps ...` -> `rsh huawei status` -> `rsh huawei
+info` -> `rsh huawei set --voltage V --persist --apply` (safe off-line
+defaults first) -> `calibrate-current` with a load -> `set`/`hold`.
