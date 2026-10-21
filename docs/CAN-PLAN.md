@@ -299,9 +299,9 @@ waits on documentation.
 |---|---|---|
 | 1 core | **done 2026-10-21** (`132a3e1`): `core/canbus.py`, `core/gs_usb.py`, virtual bus with ACK model, `can:` specs in `open_link`, `rsh ports` CAN section, session records `kind="can"`, 28 tests | `tests/test_canbus.py` |
 | 2 Huawei | **done 2026-10-21** (code; bench test pending): `protocols/huawei_r48xx/{ids,regs}.py`, `simulators/huawei_psu_sim.py`, `analyzer/huawei.py`, `analyzer/identify_can.py` (identify's CAN branch), `rsh huawei status/info/calibrate-current/set/hold/caps/sim`, 20 tests | `tests/test_huawei.py` |
-| 3 battery dialects | not started | |
-| 4 gateway | not started | |
-| 5 Android | not started (the gs_usb client already takes the termux-usb fd: `can:gs:.0`) | |
+| 3 battery dialects | **done 2026-10-22** (code; bench pending): `protocols/pylontech_can/{frames,dialects}.py` (Pylontech LV / Victron / Dyness-L incl. native 0x18BB/0x18AA / LuxPower 0x379 / Seplos bitmap, LV-HUB offsets, both readings of every disputed field), `simulators/can_battery_sim.py` (battery + inverter/GX), `analyzer/can_battery.py` (inventory, dialect ranking, unlock rule, snapshot), identify/discover/dump/soc/sniff/timeline on CAN ports, 20 tests | `tests/test_pylontech_can.py` |
+| 4 gateway | **done 2026-10-22** (code; bench pending): `analyzer/can_bridge.py` (`CanBridge` relay both ways, `CanPolicyEngine` on 0x351 with the RS485 invariants, `run_can_selftest`), `rsh bridge`/`rsh selftest` on CAN ports, 7 tests | `tests/test_can_bridge.py` |
+| 5 Android | code path exists (gs_usb client over the termux-usb fd: `can:gs:.0` / `can:gs:.1`, `rsh ports` lists the channels); untested on the Pixel | |
 
 Finding from the simulator work (3.6 calibrate-current): on a 50-52 A unit
 the `ratio1024` scale is A x 1024/52 = A x 19.7, i.e. the same as `x20`

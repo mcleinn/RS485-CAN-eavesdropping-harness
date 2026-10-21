@@ -107,6 +107,59 @@ def _extract(cid2: int, payload: dict, cfg: TimelineConfig) -> dict:
     return {k: v for k, v in out.items() if v is not None}
 
 
+def _extract_can(dec: dict, cfg: TimelineConfig) -> dict:
+    """Series fields from a decoded CAN record (Pylontech family, Dyness
+    native, Huawei PSU) - the CAN twin of _extract."""
+    out: dict = {}
+    if dec.get("proto") == "huawei-r48xx":
+        if dec.get("kind") == "status":
+            m = {"out_voltage_v": "psu_v", "out_current_a": "psu_i",
+                 "current_limit_ratio": "psu_limit_ratio", "out_temp_c": "psu_temp"}
+            if dec.get("name") in m:
+                out[m[dec["name"]]] = dec.get("value")
+        return {k: v for k, v in out.items() if v is not None}
+    name = dec.get("name")
+    if name == "limits":
+        out["cvl"] = dec.get("cvl_v")
+        if dec.get("ccl_a") is not None:
+            out["ccl"] = round(dec["ccl_a"] * cfg.ccl_factor, 3)
+        if dec.get("dcl_a") is not None:
+            out["dcl"] = round(dec["dcl_a"] * cfg.ccl_factor, 3)
+    elif name in ("soc", "dyness_status"):
+        out["soc"] = dec.get("soc_percent"); out["soh"] = dec.get("soh_percent")
+        if name == "dyness_status":
+            out["pack_v"] = dec.get("voltage_v")
+            if dec.get("current_a") is not None:
+                out["pack_i"] = round(dec["current_a"] * cfg.current_factor, 3)
+    elif name == "analog":
+        out["pack_v"] = dec.get("voltage_v"); out["temp"] = dec.get("temperature_c")
+        if dec.get("current_a") is not None:
+            out["pack_i"] = round(dec["current_a"] * cfg.current_factor, 3)
+    elif name == "alarms":
+        al, prot = dec.get("alarms") or [], dec.get("protections") or []
+        out["ov_warn"] = any("high_voltage" in a for a in al)
+        out["alarms"] = "|".join(al); out["protections"] = "|".join(prot)
+    elif name == "alarms_pairs":
+        out["protections"] = "|".join(dec.get("alarms") or [])
+        out["alarms"] = "|".join(dec.get("warnings") or [])
+        out["ov_warn"] = ("high_voltage" in (dec.get("warnings") or [])
+                          or "high_voltage" in (dec.get("alarms") or []))
+    elif name == "requests":
+        out["charge_enable"] = dec.get("charge_enable")
+        out["discharge_enable"] = dec.get("discharge_enable")
+        out["charge_immediately"] = bool(dec.get("force_charge_1") or dec.get("force_charge_2"))
+        out["full_charge_request"] = dec.get("full_charge_request")
+    elif name == "cell_extremes":
+        if dec.get("max_cell_mv"):
+            out["max_cell"] = round(dec["max_cell_mv"] / 1000, 3)
+        if dec.get("min_cell_mv"):
+            out["min_cell"] = round(dec["min_cell_mv"] / 1000, 3)
+    elif name == "dyness_cells_1_4" and dec.get("cells_mv"):
+        out["max_cell"] = round(max(dec["cells_mv"]) / 1000, 3)
+        out["min_cell"] = round(min(dec["cells_mv"]) / 1000, 3)
+    return {k: v for k, v in out.items() if v is not None}
+
+
 def build_timeline(path: Path | str, cfg: TimelineConfig | None = None,
                    service_path: Path | str | None = None) -> dict:
     """`service_path`: optional second session recorded by `rsh
@@ -140,6 +193,31 @@ def build_timeline(path: Path | str, cfg: TimelineConfig | None = None,
         events.append(e)
         return e
 
+    def apply_changes(new: dict, t: float) -> None:
+        # ---- change detection against the running state
+        for k, v in new.items():
+            old = state.get(k)
+            if k in WATCHED:
+                if old is not None and old != v:
+                    kind = "ccl-change" if k == "ccl" else f"{k}-change"
+                    e = ev(t, kind, f"{k} changed {old} -> {v}", field=k, old=old, new=v)
+                    if k == "ccl":
+                        ccl_change_events.append(e)
+                elif old is None:
+                    ev(t, "first", f"{k} = {v}", field=k, new=v)
+            elif k == "pack_i":
+                if old is None or abs(v - old) >= cfg.current_step_a:
+                    ev(t, "current", f"pack current {old} -> {v} A", field=k, old=old, new=v)
+            elif k == "max_cell":
+                if old is None or abs(v - old) >= cfg.cell_step_v:
+                    ev(t, "maxcell", f"max cell {old} -> {v} V", field=k, old=old, new=v)
+            elif k == "soc":
+                if old is None or v != old:
+                    ev(t, "soc", f"SOC {old} -> {v} %", field=k, old=old, new=v)
+            state[k] = v
+        if "ccl" in new and (not ccl_hist or ccl_hist[-1][1] != new["ccl"]):
+            ccl_hist.append((t, new["ccl"]))
+
     for r in recs:
         t = r.get("t", 0.0)
         if r.get("kind") == "note":
@@ -162,6 +240,33 @@ def build_timeline(path: Path | str, cfg: TimelineConfig | None = None,
         if r.get("kind") == "service-settings":
             if r.get("changed"):
                 ev(t, "svc-setting", r.get("note") or "setting changed")
+            continue
+        if r.get("kind") == "can":
+            dec = r.get("decoded") or {}
+            mode = r.get("mode") or mode
+            if r.get("err"):
+                errors.append({"t": round(t, 4), "t_rel": round(t - t0, 3),
+                               "flow": None, "errors": [r["err"]]})
+                ev(t, "frame-error", f"CAN error frame: {r['err']}")
+                continue
+            flow = r.get("flow") or dec.get("flow")
+            if flow:
+                gap = t - last_t_by_flow[flow] if flow in last_t_by_flow else None
+                last_t_by_flow[flow] = t
+            else:
+                gap = None
+            cid2_hist[r.get("id", "?")] = cid2_hist.get(r.get("id", "?"), 0) + 1
+            if r.get("dir") == "tx" and r.get("acked") is False:
+                ev(t, "unanswered", f"CAN frame {r.get('id')} got no ACK")
+            new = _extract_can(dec, cfg) if dec else {}
+            if not new:
+                continue
+            row = {"t": round(t, 4), "t_rel": round(t - t0, 3), "kind": "sample",
+                   "cid2": None, "rtn": None, "can_id": r.get("id"), "latency_ms": None,
+                   "gap_s": round(gap, 3) if gap is not None else None}
+            apply_changes(new, t)
+            row.update(state)
+            series.append(row)
             continue
         if r.get("kind") != "frame":
             if r.get("kind") == "raw" and r.get("len", 0):
@@ -217,29 +322,7 @@ def build_timeline(path: Path | str, cfg: TimelineConfig | None = None,
             payload = P.decode_response_info(req["cid2"], dec["info"])
             if payload and "decode_error" not in payload:
                 new = _extract(req["cid2"], payload, cfg)
-        # ---- change detection against the running state
-        for k, v in new.items():
-            old = state.get(k)
-            if k in WATCHED:
-                if old is not None and old != v:
-                    kind = "ccl-change" if k == "ccl" else f"{k}-change"
-                    e = ev(t, kind, f"{k} changed {old} -> {v}", field=k, old=old, new=v)
-                    if k == "ccl":
-                        ccl_change_events.append(e)
-                elif old is None:
-                    ev(t, "first", f"{k} = {v}", field=k, new=v)
-            elif k == "pack_i":
-                if old is None or abs(v - old) >= cfg.current_step_a:
-                    ev(t, "current", f"pack current {old} -> {v} A", field=k, old=old, new=v)
-            elif k == "max_cell":
-                if old is None or abs(v - old) >= cfg.cell_step_v:
-                    ev(t, "maxcell", f"max cell {old} -> {v} V", field=k, old=old, new=v)
-            elif k == "soc":
-                if old is None or v != old:
-                    ev(t, "soc", f"SOC {old} -> {v} %", field=k, old=old, new=v)
-            state[k] = v
-        if "ccl" in new and (not ccl_hist or ccl_hist[-1][1] != new["ccl"]):
-            ccl_hist.append((t, new["ccl"]))
+        apply_changes(new, t)
         row.update(state)
         series.append(row)
     if pending is not None:
@@ -501,6 +584,16 @@ class LiveState:
         if not payload or "decode_error" in payload:
             return out
         new = _extract(self.pending_cid2, payload, self.cfg)
+        return self._apply(new, now)
+
+    def feed_can(self, dec: dict | None, now: float) -> list[str]:
+        """Same as feed() for a decoded CAN frame (no pairing needed)."""
+        if not dec:
+            return []
+        return self._apply(_extract_can(dec, self.cfg), now)
+
+    def _apply(self, new: dict, now: float) -> list[str]:
+        out: list[str] = []
         changed = []
         for k, v in new.items():
             old = self.state.get(k)

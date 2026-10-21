@@ -366,25 +366,23 @@ class RshTui(App):
                 self._event(f"report: {S.save_report(sess.path, report, 'identify')}")
                 sess.close()
             elif key == "discover":
-                from .analyzer.discover import discover, format_discovery
                 sess = S.SessionWriter(S.new_session_path("discover"))
-                link = open_link(port, baud, name="disc")
+                link = open_link(port, baud, name="disc", listen_only=True)
                 try:
-                    report = discover(link, sess, on_event=self._event)
+                    report, text = self._discover_any(link, sess)
                 finally:
                     link.close()
-                self._event(format_discovery(report))
+                self._event(text)
                 self._event(f"report: {S.save_report(sess.path, report, 'discovery')}")
                 sess.close()
             elif key == "dump":
-                from .analyzer.dump import dump_stack, format_dump
                 sess = S.SessionWriter(S.new_session_path("dump"))
-                link = open_link(port, baud, name="dump")
+                link = open_link(port, baud, name="dump", listen_only=True)
                 try:
-                    report = dump_stack(link, sess, on_event=self._event)
+                    report, text = self._dump_any(link, sess)
                 finally:
                     link.close()
-                self._event(format_dump(report))
+                self._event(text)
                 self._event(f"report: {S.save_report(sess.path, report, 'dump')}")
                 sess.close()
             elif key == "readout":
@@ -392,16 +390,24 @@ class RshTui(App):
             elif key == "selftest":
                 from .analyzer.selftest import run_selftest
                 sess = S.SessionWriter(S.new_session_path("selftest"))
-                report = run_selftest(port, port2, session=sess, on_event=self._event)
+                if port.lower().startswith("can:"):
+                    from .analyzer.can_bridge import run_can_selftest
+                    l1, l2 = open_link(port, baud, name="ch0"), open_link(port2, baud, name="ch1")
+                    try:
+                        report = run_can_selftest(l1, l2, session=sess, on_event=self._event)
+                    finally:
+                        l1.close(); l2.close()
+                else:
+                    report = run_selftest(port, port2, session=sess, on_event=self._event)
                 self._event(f"RESULT: {'PASSED' if report['passed'] else 'FAILED'}")
                 self._event(f"report: {S.save_report(sess.path, report, 'selftest')}")
                 sess.close()
             elif key == "sniff":
                 from .analyzer.sniff import Sniffer
                 sess = S.SessionWriter(S.new_session_path("sniff"))
-                links = {"ch1": open_link(port, baud, name="ch1")}
+                links = {"ch1": open_link(port, baud, name="ch1", listen_only=True)}
                 if port2 and port2 != port:
-                    links["ch2"] = open_link(port2, baud, name="ch2")
+                    links["ch2"] = open_link(port2, baud, name="ch2", listen_only=True)
                 sn = Sniffer(links, sess, on_event=self._event, quiet=True)
                 self.job = {"name": f"sniff@{port}", "stop": sn.stop,
                             "links": tuple(links.values())}
@@ -427,8 +433,6 @@ class RshTui(App):
     def _readout(self, port: str, baud: int) -> None:
         from .core.transport import open_link
         from .analyzer.identify import identify
-        from .analyzer.discover import discover, format_discovery
-        from .analyzer.dump import dump_stack, format_dump
         folder = S.CAPTURE_DIR / "battery-checks" / time.strftime("%Y-%m-%d_%H-%M-%S")
         folder.mkdir(parents=True, exist_ok=True)
         self._event(f"[b]battery check[/b] -> {folder}")
@@ -446,20 +450,39 @@ class RshTui(App):
             baud = int(hits[0]["baud"])
             self._event(f"[b]using detected baud {baud}[/b]")
         sess = S.SessionWriter(folder / "discover.jsonl")
-        link = open_link(port, baud, name="disc")
+        link = open_link(port, baud, name="disc", listen_only=True)
         try:
-            rep = discover(link, sess, on_event=self._event)
+            rep, text = self._discover_any(link, sess)
         finally:
             link.close()
-        self._event(format_discovery(rep)); S.save_report(sess.path, rep, "discovery"); sess.close()
+        self._event(text); S.save_report(sess.path, rep, "discovery"); sess.close()
         sess = S.SessionWriter(folder / "dump.jsonl")
-        link = open_link(port, baud, name="dump")
+        link = open_link(port, baud, name="dump", listen_only=True)
         try:
-            rep = dump_stack(link, sess, on_event=self._event)
+            rep, text = self._dump_any(link, sess)
         finally:
             link.close()
-        self._event(format_dump(rep)); S.save_report(sess.path, rep, "dump"); sess.close()
+        self._event(text); S.save_report(sess.path, rep, "dump"); sess.close()
         self._event(f"[b]done[/b] - files in {folder}")
+
+    def _discover_any(self, link, sess) -> tuple[dict, str]:
+        """discover for a serial or a CAN link (protocol by port kind)."""
+        if getattr(link, "is_can", False):
+            from .analyzer.can_battery import discover_can, format_discovery_can
+            rep = discover_can(link, sess, on_event=self._event)
+            return rep, format_discovery_can(rep)
+        from .analyzer.discover import discover, format_discovery
+        rep = discover(link, sess, on_event=self._event)
+        return rep, format_discovery(rep)
+
+    def _dump_any(self, link, sess) -> tuple[dict, str]:
+        if getattr(link, "is_can", False):
+            from .analyzer.can_battery import dump_can, format_dump_can
+            rep = dump_can(link, sess, on_event=self._event)
+            return rep, format_dump_can(rep)
+        from .analyzer.dump import dump_stack, format_dump
+        rep = dump_stack(link, sess, on_event=self._event)
+        return rep, format_dump(rep)
 
     def _list_ports(self) -> list[tuple[str, str]]:
         """[(port spec, description)], real adapters first (FTDI/CH340/CP210x/
@@ -483,15 +506,35 @@ class RshTui(App):
         fd = os.environ.get("RSH_USB_FD")
         if fd:
             try:
-                from .core.ftdi_usb import describe_device
-                d = describe_device(int(fd))
-                found += [(f"usb:{ch}", f"{d['product']} channel {ch} (via termux-usb)", 0)
-                          for ch in d["channels"]]
+                from .core.gs_usb import describe_fd_device, GsUsbDevice
+                ident = describe_fd_device(int(fd))
+                if ident["kind"] == "gs_usb":
+                    from .core.canbus import CanSpec
+                    dev = GsUsbDevice.get(CanSpec("gs", f"fd{fd}", 0))
+                    info = dev.describe()
+                    dev.close()
+                    found += [(f"can:gs:.{ch}", f"{info['product']} CAN channel {ch} "
+                               f"(via termux-usb)", 0) for ch in range(info["channels"])]
+                else:
+                    from .core.ftdi_usb import describe_device
+                    d = describe_device(int(fd))
+                    found += [(f"usb:{ch}", f"{d['product']} channel {ch} (via termux-usb)", 0)
+                              for ch in d["channels"]]
             except Exception as e:
                 self.log_line(f"usb: {e}")
         elif sys.platform == "android":
             self.log_line("no USB device: start via rsh-tui / tools/termux/rsh-usb tui "
                           "with the adapter plugged in")
+        if not fd:
+            try:
+                from .core.gs_usb import list_can_adapters
+                for c in list_can_adapters():
+                    if c.get("kind") == "can":
+                        found.append((c["device"], f"{c['description']} [{c['hwid']}]", 0))
+                    elif c.get("kind") == "dfu":
+                        self.log_line(f"[yellow]{c['description']}[/yellow]")
+            except Exception as e:
+                self.log_line(f"CAN enumeration: {e}")
         found.sort(key=lambda t: t[2])
         return [(dev, desc) for dev, desc, _ in found]
 
@@ -499,7 +542,7 @@ class RshTui(App):
         """Candidate ports for auto mode: all channels of real adapters."""
         ports = self._list_ports()
         adapters = [d for d, desc in ports
-                    if d.startswith("usb:") or any(k in desc.upper() for k in
+                    if d.startswith(("usb:", "can:")) or any(k in desc.upper() for k in
                        ("VID:PID=0403", "VID:PID=1A86", "VID:PID=10C4", "VID:PID=067B"))]
         return adapters or [d for d, _ in ports]
 

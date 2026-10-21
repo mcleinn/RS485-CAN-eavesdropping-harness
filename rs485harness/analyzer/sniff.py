@@ -53,7 +53,33 @@ class Sniffer:
                         break
                     self.stop_event.wait(1.0)
 
+    def _watch_can(self, chan: str, link) -> None:
+        """CAN tap: every frame decoded (Huawei / Pylontech family / Dyness
+        native), logged as kind="can", fed to the same LiveState."""
+        from ..core.canbus import log_can
+        from .can_battery import decode_any
+        while not self.stop_event.is_set():
+            msg = link.recv(timeout=0.1)
+            if msg is None or msg.echo:
+                continue
+            dec = decode_any(msg)
+            flow = dec.get("flow") if dec else None
+            log_can(self.session, chan, "rx", msg, decoded=dec, flow=flow, mode="tap")
+            if msg.err:
+                self.stats[chan]["raw_bytes"] += 1
+                self.on_event(f"[{chan}] {msg}")
+                continue
+            self.stats[chan]["frames"] += 1
+            if not self.quiet:
+                label = (dec.get("name") or dec.get("kind")) if dec else "?"
+                self.on_event(f"[{chan}] {flow or '?':8} {msg}  {label}")
+            for line in self.live.feed_can(dec, time.monotonic()):
+                self.on_event(time.strftime("%H:%M:%S ") + line)
+
     def _watch_inner(self, chan: str, link: Link) -> None:
+        if getattr(link, "is_can", False):
+            self._watch_can(chan, link)
+            return
         acc = FrameAccumulator()
         while not self.stop_event.is_set():
             chunk = link.read(timeout=0.1)

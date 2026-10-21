@@ -33,8 +33,14 @@ driven over libusb from the descriptor `termux-usb` hands over; see
   `status`, `info`, `calibrate-current` (the disputed current scale is
   measured per unit, never assumed), `set` (dry run unless `--apply`,
   hard caps in `.rsh-config.json`, verified by measurement), `hold`
-  (keep-alive loop), `sim` (bench substitute). Plan and references:
-  `docs/CAN-PLAN.md`.
+  (keep-alive loop), `sim` (bench substitute). Battery side: the
+  Pylontech-CAN family (Pylontech LV, Victron CAN-bus BMS, Dyness
+  "DYNESS-L" incl. its native 0x18BB/0x18AA frames, LuxPower, Seplos CAN)
+  is decoded, simulated (`battery-sim`/`inverter-sim --can-profile`), and
+  `identify`/`discover`/`dump`/`soc`/`sniff`/`timeline` run on CAN ports
+  unchanged; `bridge` between two CAN channels is a gateway with the same
+  downwards-only policy on 0x351; `selftest` checks channel 0 against
+  channel 1. Plan and references: `docs/CAN-PLAN.md`.
 - **Discover** ("what do they offer?"): full inventory of a responder —
   every command classified supported/unsupported/error/silent, all
   payloads decoded into a state snapshot, dialect quirks flagged; Modbus
@@ -104,7 +110,7 @@ driven over libusb from the descriptor `termux-usb` hands over; see
 
 ```
 pip install -e ".[dev]"
-python -m pytest          # 143 tests, all hardware-free
+python -m pytest          # 170 tests, all hardware-free
 rsh demo                  # sim inverter vs sim battery over loopback
 rsh menu                  # interactive runner (concurrent jobs per channel)
 rsh tui                   # full-screen UI (pip install -e ".[tui]")

@@ -296,6 +296,23 @@ def cmd_battery_sim(args) -> int:
     state = preset(args.preset)
     apply_overrides(state, parse_overrides(args.set))
     state.drift = args.drift
+    if is_can_link_spec(args.port):
+        from .simulators.can_battery_sim import CanBatterySimulator
+        from .protocols.pylontech_can.dialects import CAN_BATTERY_PROFILES
+        cprof = CAN_BATTERY_PROFILES[args.can_profile]
+        sess = S.SessionWriter(args.session or S.new_session_path("battery-sim"))
+        link = open_link(args.port, args.baud or cprof.bitrate, name="battery")
+        sim = CanBatterySimulator(link, state, cprof, sess, chan="bat",
+                                  on_event=_quiet if args.json else _echo, string=args.string)
+        print(f"CAN battery-sim '{cprof.name}' (brand {cprof.brand!r}) on {args.port} @ "
+              f"{link.bitrate}; session: {sess.path}", flush=True)
+        try:
+            stats = sim.run(duration=args.duration)
+        except KeyboardInterrupt:
+            stats = sim.stats
+        _print(args, f"stats: {stats}", {"stats": stats, "session": str(sess.path)})
+        sess.close(); link.close()
+        return 0
     profile = BATTERY_PROFILES[args.profile]
     if args.adr:
         profile = DialectProfile(**{**profile.to_dict(),
@@ -320,6 +337,24 @@ def cmd_battery_sim(args) -> int:
 
 
 def cmd_inverter_sim(args) -> int:
+    if is_can_link_spec(args.port):
+        from .simulators.can_battery_sim import CanInverterSimulator
+        from .protocols.pylontech_can.dialects import CAN_INVERTER_PROFILES
+        cprof = CAN_INVERTER_PROFILES[args.can_profile]
+        sess = S.SessionWriter(args.session or S.new_session_path("inverter-sim"))
+        link = open_link(args.port, args.baud or cprof.bitrate, name="inverter")
+        sim = CanInverterSimulator(link, cprof, sess, chan="inv",
+                                   on_event=_quiet if args.json else _echo)
+        print(f"CAN inverter-sim '{cprof.name}' on {args.port} @ {link.bitrate}; "
+              f"session: {sess.path}", flush=True)
+        try:
+            stats = sim.run(duration=args.duration)
+        except KeyboardInterrupt:
+            stats = sim.stats
+        _print(args, f"stats: {stats}", {"stats": stats, "snapshot": sim.snapshot,
+                                         "ids_seen": sim.ids_seen, "session": str(sess.path)})
+        sess.close(); link.close()
+        return 0
     profile = INVERTER_PROFILES[args.profile]
     over: dict = {}
     if args.adr is not None:
@@ -464,6 +499,27 @@ def cmd_script(args) -> int:
 
 
 def cmd_soc(args) -> int:
+    if is_can_link_spec(args.port):
+        _arm_deadline(getattr(args, 'max_seconds', None), 'soc')
+        from .analyzer.can_battery import soc_can
+        sess = S.SessionWriter(args.session or S.new_session_path("soc"))
+        link = open_link(args.port, args.baud, name="soc",
+                         listen_only=True)
+        rep = soc_can(link, sess, listen_s=max(args.timeout, 3.0),
+                      on_event=_quiet if args.json else _echo)
+        rep["session"] = str(sess.path)
+        human = [f"SOC via CAN broadcasts (brand {rep['brand']!r}, {rep['frames']} frames)",
+                 f"{'string':>6} {'SOC%':>5} {'SOH%':>5} {'V':>7} {'A':>7} {'T':>6} {'mods':>5}"]
+        for r in rep["rows"]:
+            human.append(f"{r['string']:>6} {r['soc_percent']!s:>5} {r['soh_percent']!s:>5} "
+                         f"{r['voltage_v']!s:>7} {r['current_a']!s:>7} "
+                         f"{r['temperature_c']!s:>6} {r['module_count']!s:>5}")
+        if not rep["rows"]:
+            human.append("  no 0x355/0x356 heard" + (f" ({rep['error_frames']} error frames: "
+                                                      f"wrong bitrate?)" if rep["error_frames"] else ""))
+        _print(args, "\n".join(human), rep)
+        sess.close(); link.close()
+        return 0 if rep["rows"] else 2
     _arm_deadline(getattr(args, 'max_seconds', None), 'soc')
     """Quick per-pack SOC/V/I table via one 0x42 'FF' (all packs) poll."""
     from .analyzer.identify import _probe_pylontech
@@ -534,6 +590,19 @@ def cmd_dump(args) -> int:
     _arm_deadline(getattr(args, 'max_seconds', None), 'dump')
     from .analyzer.dump import dump_stack, format_dump
     sess = S.SessionWriter(args.session or S.new_session_path("dump"))
+    if is_can_link_spec(args.port):
+        from .analyzer.can_battery import dump_can, format_dump_can
+        link = open_link(args.port, args.baud, name="dump",
+                         listen_only=True)
+        report = dump_can(link, sess, listen_s=args.listen, active=not args.passive_only,
+                          on_event=_quiet if args.json else _echo)
+        report["session"] = str(sess.path)
+        report_path = S.save_report(sess.path, report, "dump")
+        report["report_file"] = str(report_path)
+        _print(args, format_dump_can(report) + f"\nsession: {sess.path}\n"
+               f"full JSON: {report_path}", report)
+        sess.close(); link.close()
+        return 0 if report.get("result") == "ok" else 2
     link = _open_serial(args.port, args.baud, "dump")
     ver = int(args.ver, 16) if args.ver else 0x20
     adrs = [int(a, 0) for a in args.adrs.split(",")] if args.adrs else None
@@ -603,6 +672,19 @@ def cmd_discover(args) -> int:
     _arm_deadline(getattr(args, 'max_seconds', None), 'discover')
     from .analyzer.discover import discover, format_discovery
     sess = S.SessionWriter(args.session or S.new_session_path("discover"))
+    if is_can_link_spec(args.port):
+        from .analyzer.can_battery import discover_can, format_discovery_can
+        link = open_link(args.port, args.baud, name="disc",
+                         listen_only=True)
+        report = discover_can(link, sess, listen_s=args.listen, active=not args.passive_only,
+                              on_event=_quiet if args.json else _echo)
+        report["session"] = str(sess.path)
+        report_path = S.save_report(sess.path, report, "discovery")
+        report["report_file"] = str(report_path)
+        _print(args, format_discovery_can(report) +
+               f"\nsession: {sess.path}\nreport:  {report_path}", report)
+        sess.close(); link.close()
+        return 0 if report.get("result") == "ok" else 2
     link = _open_serial(args.port, args.baud, "disc")
     report = discover(link, sess,
                       adr=args.adr, ver=int(args.ver, 16) if args.ver else None,
@@ -687,9 +769,9 @@ def cmd_sniff(args) -> int:
     from .analyzer.sniff import Sniffer
     sess = S.SessionWriter(args.session or S.new_session_path("sniff"))
     links = {}
-    links["ch1"] = _open_serial(args.ch1, args.baud, "ch1")
+    links["ch1"] = open_link(args.ch1, args.baud, name="ch1", listen_only=True)
     if args.ch2:
-        links["ch2"] = _open_serial(args.ch2, args.baud, "ch2")
+        links["ch2"] = open_link(args.ch2, args.baud, name="ch2", listen_only=True)
     sn = Sniffer(links, sess, on_event=_quiet if args.json else _echo,
                  markers=not args.no_markers, quiet=args.quiet)
     mon = svc_link = None
@@ -725,6 +807,30 @@ def cmd_bridge(args) -> int:
     from .analyzer.translate import Translator
     from .analyzer.policy import PolicyEngine, make_policy
     sess = S.SessionWriter(args.session or S.new_session_path("bridge"))
+    if is_can_link_spec(args.ch1) or is_can_link_spec(args.ch2):
+        if not (is_can_link_spec(args.ch1) and is_can_link_spec(args.ch2)):
+            print("bridge: both channels must be CAN (can:...) or both serial - a "
+                  "CAN<->RS485 translation is not a bridge job", file=sys.stderr)
+            return 2
+        from .analyzer.can_bridge import CanBridge, CanPolicyEngine
+        from .analyzer.policy import make_policy
+        a = open_link(args.ch1, args.baud, name="ch1")
+        b = open_link(args.ch2, args.baud, name="ch2")
+        eng = None
+        if args.policy:
+            eng = CanPolicyEngine(make_policy(args.policy), loss_timeout_s=args.loss_timeout)
+        br = CanBridge(a, b, sess, engine=eng, role_a=args.role_ch1, role_b=args.role_ch2,
+                       markers=not args.no_markers, quiet=args.quiet,
+                       on_event=_quiet if args.json else _echo)
+        print(f"CAN gateway {args.ch1}({args.role_ch1}) <-> {args.ch2}({args.role_ch2}) @ "
+              f"{a.bitrate}; MODE={br.mode}"
+              + (f" [policy {eng.policy.describe()} on 0x351 BMS->INV]" if eng else "")
+              + f"; Ctrl+C to stop; session: {sess.path}", flush=True)
+        stats = br.run(duration=args.duration)
+        _print(args, f"stats: {stats}", {"stats": stats, "mode": br.mode,
+                                          "session": str(sess.path)})
+        sess.close(); a.close(); b.close()
+        return 0
     a = _open_serial(args.ch1, args.baud, "ch1")
     b = _open_serial(args.ch2, args.baud, "ch2")
     if args.detect_echo:
@@ -768,11 +874,22 @@ def cmd_bridge(args) -> int:
 def cmd_selftest(args) -> int:
     _arm_deadline(getattr(args, 'max_seconds', None), 'selftest')
     from .analyzer.selftest import run_selftest
-    print("Self-test requires ch1 and ch2 joined on one RS485 bus: "
-          "A-A, B-B (straight, not crossed) plus GND.", flush=True)
     sess = S.SessionWriter(args.session or S.new_session_path("selftest"))
-    report = run_selftest(args.port1, args.port2, session=sess,
-                          on_event=_quiet if args.json else _echo)
+    if is_can_link_spec(args.port1):
+        from .analyzer.can_bridge import run_can_selftest
+        print("CAN self-test requires both channels on ONE terminated bus: CAN-H to CAN-H, "
+              "CAN-L to CAN-L, 120 ohm at each end.", flush=True)
+        l1 = open_link(args.port1, 500000, name="ch0")
+        l2 = open_link(args.port2, 500000, name="ch1")
+        try:
+            report = run_can_selftest(l1, l2, session=sess, on_event=_quiet if args.json else _echo)
+        finally:
+            l1.close(); l2.close()
+    else:
+        print("Self-test requires ch1 and ch2 joined on one RS485 bus: "
+              "A-A, B-B (straight, not crossed) plus GND.", flush=True)
+        report = run_selftest(args.port1, args.port2, session=sess,
+                              on_event=_quiet if args.json else _echo)
     report["session"] = str(sess.path)
     report_path = S.save_report(sess.path, report, "selftest")
     report["report_file"] = str(report_path)
@@ -877,6 +994,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--duration", type=float, help="seconds (default: forever)")
     p.add_argument("--detect-echo", action="store_true",
                    help="probe for TX echo before starting (bus must be quiet)")
+    p.add_argument("--can-profile", default="pylontech-lv",
+                   choices=sorted(__import__("rs485harness.protocols.pylontech_can.dialects",
+                                             fromlist=["CAN_BATTERY_PROFILES"]).CAN_BATTERY_PROFILES),
+                   help="CAN ports: battery dialect (pylontech-lv, victron, dyness-l, "
+                        "luxpower, seplos-can)")
+    p.add_argument("--string", type=int, default=0,
+                   help="CAN ports: LV-HUB string address (id + 0x1000*n)")
     common(p)
     p.set_defaults(fn=cmd_battery_sim)
 
@@ -889,6 +1013,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ver", help="protocol version byte, hex (20/25)")
     p.add_argument("--duration", type=float)
     p.add_argument("--detect-echo", action="store_true")
+    p.add_argument("--can-profile", default="pylon-inverter",
+                   choices=sorted(__import__("rs485harness.protocols.pylontech_can.dialects",
+                                             fromlist=["CAN_INVERTER_PROFILES"]).CAN_INVERTER_PROFILES),
+                   help="CAN ports: inverter behaviour (pylon-inverter, victron-gx, "
+                        "pylon-unlock, silent-inverter)")
     common(p)
     p.set_defaults(fn=cmd_inverter_sim)
 
@@ -1007,6 +1136,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--baud", type=int, default=115200)
     p.add_argument("--adrs", help="comma-separated addresses (default: scan 0..15)")
     p.add_argument("--ver", help="protocol version byte hex (default 20)")
+    p.add_argument("--listen", type=float, default=4.0,
+                   help="CAN ports: seconds to collect broadcasts")
+    p.add_argument("--passive-only", action="store_true",
+                   help="CAN ports: never send the 0x305/0x307 unlock")
     common(p)
     p.set_defaults(fn=cmd_dump)
 
@@ -1017,6 +1150,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--adr", type=lambda s: int(s, 0),
                    help="skip the scan, discover at this address")
     p.add_argument("--ver", help="protocol version byte, hex (default 20)")
+    p.add_argument("--listen", type=float, default=6.0,
+                   help="CAN ports: seconds to collect broadcasts")
+    p.add_argument("--passive-only", action="store_true",
+                   help="CAN ports: never send the 0x305/0x307 unlock")
     common(p)
     p.set_defaults(fn=cmd_discover)
 

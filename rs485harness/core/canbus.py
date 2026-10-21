@@ -296,17 +296,9 @@ class VirtualCanBus:
         now = time.perf_counter()
         ackers = [e for e in others if e.bitrate == sender.bitrate and not e.listen_only]
         sender.stats["tx"] += 1
-        if not ackers:
-            sender.stats["tx_timeout"] += 1
-            # the frame is still on the wire: listen-only peers at the right
-            # rate see it (they just do not ACK)
-            for e in others:
-                if e.bitrate == sender.bitrate:
-                    e._push(CanMsg(now, msg.can_id, bytes(msg.data), msg.ext, msg.rtr,
-                                   channel=e.channel))
-            raise CanTxTimeout(f"{sender.name}: no ACK for {msg.id_str} on bus "
-                               f"{self.name} (no active peer at {sender.bitrate})")
-        self.frames_total += 1
+        # the frame is on the wire whether or not anyone ACKs: peers at the
+        # right rate see it (listen-only ones just do not ACK), peers at a
+        # different rate see a stuff/form error frame
         for e in others:
             if e.bitrate == sender.bitrate:
                 e._push(CanMsg(now, msg.can_id, bytes(msg.data), msg.ext, msg.rtr,
@@ -317,6 +309,11 @@ class VirtualCanBus:
                 e._push(CanMsg(now, CAN_ERR_PROT | CAN_ERR_BUSERROR,
                                bytes([0, 0, 0x04, 0, 0, 0, 0, 0]), err=True,
                                channel=e.channel))
+        if not ackers:
+            sender.stats["tx_timeout"] += 1
+            raise CanTxTimeout(f"{sender.name}: no ACK for {msg.id_str} on bus "
+                               f"{self.name} (no active peer at {sender.bitrate})")
+        self.frames_total += 1
         # tx echo back to the sender (what gs_usb delivers after a real ACK)
         sender._push(CanMsg(now, msg.can_id, bytes(msg.data), msg.ext, msg.rtr,
                             channel=sender.channel, echo=True))
@@ -473,4 +470,6 @@ def open_can_link(spec: str, bitrate: int | None = None, listen_only: bool = Fal
 
 
 def looks_like_bitrate(value: int | None) -> bool:
-    return bool(value) and value >= 10_000
+    """A serial baud (9600/19200/115200) is never a CAN bitrate; only the
+    standard CAN rates count, so RS485 defaults fall through to 500 k."""
+    return bool(value) and value in STANDARD_BITRATES
