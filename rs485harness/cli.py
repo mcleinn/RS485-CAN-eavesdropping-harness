@@ -143,6 +143,21 @@ def is_can_link_spec(port: str) -> bool:
     return bool(port) and port.lower().startswith("can:")
 
 
+def _labelled(prefix: str, label: str | None) -> str:
+    """captures/<ts>-<prefix>[-<label>].jsonl - the Phase B naming
+    (B3.1-<serial>) without renaming files afterwards."""
+    if not label:
+        return prefix
+    safe = "".join(c if c.isalnum() or c in "._-" else "-" for c in label.strip())
+    return f"{prefix}-{safe}" if safe else prefix
+
+
+def _save_huawei(cfg: dict, hcfg: dict) -> None:
+    from .runner import save_config
+    cfg["huawei"] = {k: v for k, v in hcfg.items() if not k.startswith("_")}
+    save_config(cfg)
+
+
 def cmd_huawei(args) -> int:
     """Huawei R48xx rectifier control over CAN (docs/CAN-PLAN.md 3.6)."""
     _arm_deadline(getattr(args, 'max_seconds', None), 'huawei')
@@ -150,58 +165,115 @@ def cmd_huawei(args) -> int:
     from .runner import load_config, save_config
     from .protocols.huawei_r48xx import regs as HR
     from .protocols.huawei_r48xx.ids import BITRATE
+    from .analyzer.huawei import bind_unit, unit_on_addr, PERSIST_REMINDER
     cfg = load_config()
     hcfg = huawei_config(cfg)
+    if hcfg.get("_migrated"):
+        print(f"config note: {hcfg['_migrated']}", file=sys.stderr, flush=True)
+        _save_huawei(cfg, hcfg)
     on_event = _quiet if args.json else _echo
     sub = args.sub
+    label = getattr(args, "label", None)
 
-    if sub == "caps":          # no bus access: edit the hard caps / scale
+    if sub == "caps":          # no bus access: edit the hard caps / per-serial scale
         changed = {}
         if args.voltage_max is not None:
             hcfg["caps"]["voltage_max"] = changed["voltage_max"] = args.voltage_max
         if args.current_max is not None:
             hcfg["caps"]["current_max"] = changed["current_max"] = args.current_max
-        if args.current_scale is not None:
-            if args.current_scale not in HR.CURRENT_SCALES and args.current_scale != "none":
+        if args.current_scale is not None or args.nominal_a is not None:
+            if args.current_scale is not None and args.current_scale not in HR.CURRENT_SCALES \
+                    and args.current_scale != "none":
                 print(f"unknown scale {args.current_scale}; one of "
                       f"{sorted(HR.CURRENT_SCALES)} or none", file=sys.stderr)
                 return 2
-            hcfg["current_scale"] = changed["current_scale"] = \
-                None if args.current_scale == "none" else args.current_scale
-        if args.nominal_a is not None:
-            hcfg["nominal_a"] = changed["nominal_a"] = args.nominal_a
+            serial = args.serial
+            if not serial:
+                serial, _ = unit_on_addr(hcfg, args.addr if args.addr is not None
+                                         else hcfg.get("addr", 1))
+            if not serial:
+                print("a current scale / nominal current belongs to a SERIAL: give --serial "
+                      "<12 hex> (from `info`), or run `info` first so the address is bound",
+                      file=sys.stderr)
+                return 2
+            scale = None if args.current_scale == "none" else args.current_scale
+            unit = hcfg["units"].setdefault(serial.upper(), {})
+            if args.current_scale is not None:
+                unit["current_scale"] = changed["current_scale"] = scale
+            if args.nominal_a is not None:
+                unit["nominal_a"] = changed["nominal_a"] = args.nominal_a
+            unit.setdefault("addr", args.addr if args.addr is not None else hcfg.get("addr", 1))
+            changed["serial"] = serial.upper()
         if changed:
-            cfg["huawei"] = hcfg
-            save_config(cfg)
-        human = (f"huawei config: caps {hcfg['caps']}, current_scale "
-                 f"{hcfg['current_scale']}, nominal_a {hcfg['nominal_a']}"
+            _save_huawei(cfg, hcfg)
+        human = (f"huawei config: caps {hcfg['caps']}, units {hcfg['units']}, addr_map "
+                 f"{hcfg['addr_map']}" + (f", legacy {hcfg['legacy']}" if hcfg.get("legacy") else "")
                  + (f" (changed: {changed})" if changed else ""))
-        _print(args, human, {"huawei": hcfg, "changed": changed})
+        _print(args, human, {"huawei": {k: v for k, v in hcfg.items() if not k.startswith("_")},
+                             "changed": changed})
         return 0
 
     if sub == "sim":
         from .simulators.huawei_psu_sim import HuaweiPsuSimulator
-        sess = S.SessionWriter(args.session or S.new_session_path("huawei-sim"))
+        sess = S.SessionWriter(args.session or S.new_session_path(_labelled("huawei-sim", label)))
         link = open_link(args.port, args.bitrate, name="psu-sim")
-        sim = HuaweiPsuSimulator(link, sess, addr=args.addr, nominal_a=args.nominal_a,
+        sim_addr = args.addr if args.addr is not None else 1
+        sim = HuaweiPsuSimulator(link, sess, addr=sim_addr, nominal_a=args.nominal_a,
                                  scale=args.scale, load_ohm=args.load_ohm, load_w=args.load_w,
                                  battery_v=args.battery_v, timeout_s=args.online_timeout,
+                                 default_current_a=args.default_current_a,
+                                 serial_hex=args.serial,
+                                 polls_refresh_timeout=args.polls_refresh_timeout == "yes",
+                                 reject_zero_default_current=args.reject_zero_default_current,
+                                 on_ac_loss=args.on_ac_loss, negotiate_on_start=args.negotiate,
                                  on_event=on_event)
-        print(f"huawei-psu-sim addr {args.addr} ({args.nominal_a} A nominal, scale "
-              f"{args.scale}) on {args.port} @ {args.bitrate}; session: {sess.path}", flush=True)
+        print(f"huawei-psu-sim addr {sim_addr} serial {args.serial} ({args.nominal_a} A nominal, "
+              f"scale {args.scale}, polls_refresh_timeout={args.polls_refresh_timeout}, "
+              f"on_ac_loss={args.on_ac_loss}) on {args.port} @ {args.bitrate}; "
+              f"session: {sess.path}", flush=True)
+        import time as _t
+        sim.start()
+        t0 = _t.monotonic()
+        pending = {"ac_off": args.ac_off_after, "ac_on": args.ac_on_after}
         try:
-            stats = sim.run(duration=args.duration)
+            while sim._thread.is_alive():
+                el = _t.monotonic() - t0
+                if args.duration and el >= args.duration:
+                    break
+                if pending["ac_off"] is not None and el >= pending["ac_off"]:
+                    sim.set_ac(False); pending["ac_off"] = None
+                if pending["ac_on"] is not None and el >= pending["ac_on"]:
+                    sim.set_ac(True); pending["ac_on"] = None
+                _t.sleep(0.1)
         except KeyboardInterrupt:
-            stats = sim.stats
+            pass
+        sim.stop()
+        stats = sim.stats
         _print(args, f"stats: {stats}", {"stats": stats, "session": str(sess.path)})
         sess.close(); link.close()
         return 0
 
-    sess = S.SessionWriter(args.session or S.new_session_path(f"huawei-{sub}"))
+    sess = S.SessionWriter(args.session or S.new_session_path(_labelled(f"huawei-{sub}", label)))
     link = open_link(args.port, args.bitrate, name="ctl")
     addr = args.addr if args.addr is not None else hcfg.get("addr", 1)
-    cl = HuaweiClient(link, sess, "can", addr, hcfg, on_event)
-    report: dict = {"sub": sub, "addr": addr, "port": args.port, "bitrate": args.bitrate}
+    broadcast = bool(getattr(args, "broadcast", False))
+    if broadcast and args.addr is not None:
+        print("--broadcast and --addr are mutually exclusive (broadcast = address 0 = all "
+              "units; --expect-acks lists who must answer)", file=sys.stderr)
+        sess.close(); link.close()
+        return 2
+    expect = None
+    if getattr(args, "expect_acks", None):
+        expect = [int(x) for x in args.expect_acks.split(",") if x.strip()]
+    tap_link = None
+    if getattr(args, "tap", None):
+        tap_link = open_link(args.tap, args.bitrate, name="tap", listen_only=True)
+    cl = HuaweiClient(link, sess, "can", addr, hcfg, on_event,
+                      target_addr=0 if broadcast else None, expect_acks=expect)
+    report: dict = {"sub": sub, "addr": addr, "target": cl.target_label(), "port": args.port,
+                    "bitrate": args.bitrate, "label": label}
+    if label:
+        sess.note(f"label {label}", "can", label=label)
     rc = 0
     try:
         if sub == "status":
@@ -223,13 +295,18 @@ def cmd_huawei(args) -> int:
         elif sub == "info":
             info = cl.info(timeout=args.timeout)
             report["info"] = info
-            if info.get("nominal_current_a"):
-                hcfg["nominal_a"] = info["nominal_current_a"]
-                cfg["huawei"] = hcfg
-                save_config(cfg)
+            if info.get("serial_hex"):
+                _save_huawei(cfg, hcfg)
             lines = [f"Huawei PSU addr {addr} info:"]
             for k, v in info.items():
                 lines.append(f"  {k:20} {v}")
+            if info.get("addr_change"):
+                lines.append(f"  !! ADDR-CHANGE: {info['addr_change']} - the scale stored for "
+                             f"the previous serial is NOT applied to this one")
+            if info.get("serial_hex"):
+                _, unit = unit_on_addr(hcfg, addr)
+                lines.append(f"  bound: addr {addr} = serial {info['serial_hex']} "
+                             f"(scale {unit.get('current_scale')}, nominal {unit.get('nominal_a')})")
             human = "\n".join(lines)
             rc = 0 if info.get("nominal_current_a") else 1
         elif sub == "set":
@@ -239,8 +316,9 @@ def cmd_huawei(args) -> int:
             rep = cl.set_points(args.voltage, args.current, apply=args.apply,
                                 persist=args.persist, verify=not args.no_verify)
             report.update(rep)
-            lines = [f"result: {rep['result']}" + ("" if args.apply else
-                                                   " (dry run - add --apply to send)")]
+            lines = [f"result: {rep['result']} target {rep['target']}"
+                     + (f" expecting acks from {rep['expect_acks']}" if rep.get("expect_acks") else "")
+                     + ("" if args.apply else " (dry run - add --apply to send)")]
             for r in rep.get("refusals", []):
                 lines.append(f"  REFUSED: {r}")
             for p in rep.get("plan", []):
@@ -248,8 +326,9 @@ def cmd_huawei(args) -> int:
                              f"{p['value']} {p['unit']} (raw {p['raw']}"
                              + (f", scale {p['scale']}" if p.get("scale") else "") + ")")
             for s in rep.get("sent", []):
-                lines.append(f"  sent {s['id']} {s['hex']}: acked={s['acked']} "
-                             f"ok={s.get('ok')} ack={s.get('ack')}")
+                lines.append(f"  sent {s['id']} {s['hex']} -> {s['target']}: acked={s['acked']} "
+                             f"ok={s.get('ok')} acks={s.get('acks')}"
+                             + (f" MISSING {s['missing_acks']}" if s.get("missing_acks") else ""))
             if "verify" in rep:
                 v = rep["verify"]
                 lines.append(f"  verify: target {v['target_v']} V, measured "
@@ -260,25 +339,47 @@ def cmd_huawei(args) -> int:
         elif sub == "calibrate-current":
             rep = cl.calibrate_current(test_a=args.test_a)
             report.update(rep)
-            if rep.get("result"):
-                hcfg["current_scale"] = rep["result"]
-                hcfg["nominal_a"] = cl.nominal_a
-                cfg["huawei"] = hcfg
-                save_config(cfg)
-            lines = [f"current scale for this unit: {rep.get('result')} "
+            if rep.get("serial_hex"):
+                _save_huawei(cfg, hcfg)
+            lines = [f"current scale for serial {rep.get('serial_hex')} (addr {addr}): "
+                     f"{rep.get('result')} "
                      f"({rep.get('source', rep.get('error', 'no candidate matched'))})"]
             for c in rep.get("candidates", []):
                 lines.append(f"  {c}")
             human = "\n".join(lines)
             rc = 0 if rep.get("result") else 1
         elif sub == "hold":
-            print(f"hold V={args.voltage} A={args.current} on PSU {addr}; status 1 s, "
-                  f"re-send 5 s; Ctrl+C stops (PSU reverts to defaults in ~60 s)", flush=True)
-            stats = cl.hold(args.voltage, args.current, args.duration)
+            if args.poll_only and (args.voltage is not None or args.current is not None):
+                print("--poll-only takes no --voltage/--current (status requests only)",
+                      file=sys.stderr)
+                return 2
+            if args.silence_after is not None:
+                print(PERSIST_REMINDER, flush=True)
+            print(f"hold V={args.voltage} A={args.current} -> {cl.target_label()} "
+                  f"(answers from addr {addr}); "
+                  + ("status 1 s, NO set frames" if args.poll_only else "status 1 s, re-send 5 s")
+                  + (f"; silence after {args.silence_after} s, then listen {args.observe} s on "
+                     f"{args.tap or args.port}" if args.silence_after is not None else "")
+                  + "; Ctrl+C stops (PSU reverts to defaults in ~60 s)", flush=True)
+            stats = cl.hold(args.voltage, args.current, args.duration, poll_only=args.poll_only,
+                            silence_after=args.silence_after, observe_s=args.observe,
+                            tap_link=tap_link)
             report["stats"] = stats
             lines = [f"hold stats: {stats}"]
             for r in stats.get("refusals", []):
                 lines.append(f"  REFUSED: {r}")
+            if stats.get("first_offline_s") is not None:
+                lines.append(f"  OFFLINE-TRANSITION at t={stats['first_offline_s']} s "
+                             f"({stats.get('offline_evidence')})")
+            elif args.poll_only:
+                lines.append("  no offline transition seen while polling")
+            if stats.get("silence"):
+                sl = stats["silence"]
+                lines.append(f"  SILENCE on {sl['measured_on']}: output disabled at "
+                             f"{sl['t_first_output_disabled']} s, zero current at "
+                             f"{sl['t_zero_current']} s, residual {sl['residual_current_a']} A, "
+                             f"unsolicited period {sl['unsolicited_period_s']} s "
+                             f"(relative to the last transmitted frame)")
             human = "\n".join(lines)
             rc = 0 if not stats.get("refusals") and not stats.get("stop_reason") else 1
         else:
@@ -286,8 +387,12 @@ def cmd_huawei(args) -> int:
             rc = 2
     finally:
         report["session"] = str(sess.path)
+        if sub != "hold":                     # hold writes its own summary
+            sess.summary(report, "can")
         sess.close()
         link.close()
+        if tap_link is not None:
+            tap_link.close()
     _print(args, human + f"\nsession: {sess.path}", report)
     return rc
 
@@ -767,7 +872,9 @@ def cmd_seplos_set(args) -> int:
 
 def cmd_sniff(args) -> int:
     from .analyzer.sniff import Sniffer
-    sess = S.SessionWriter(args.session or S.new_session_path("sniff"))
+    sess = S.SessionWriter(args.session or S.new_session_path(_labelled("sniff", args.label)))
+    if args.label:
+        sess.note(f"label {args.label}", label=args.label)
     links = {}
     links["ch1"] = open_link(args.ch1, args.baud, name="ch1", listen_only=True)
     if args.ch2:
@@ -1043,9 +1150,17 @@ def build_parser() -> argparse.ArgumentParser:
             hp.add_argument("--port", required=True, help="can:gs:0 / can:gs:0.1 / "
                                                           "can:virtual:<name>")
             hp.add_argument("--bitrate", type=int, default=125000)
-            hp.add_argument("--addr", type=int, help="PSU address (default: config or 1)")
             hp.add_argument("--timeout", type=float, default=1.0, help="reply window s")
+            hp.add_argument("--label", help="appended to the session file name "
+                                            "(Phase B naming, e.g. B3.1-<serial>)")
+        hp.add_argument("--addr", type=int, help="PSU address (default: config or 1)")
         common(hp, session=bus)
+
+    def htarget(hp):
+        hp.add_argument("--broadcast", action="store_true",
+                        help="send to address 0 (all units); exclusive with --addr")
+        hp.add_argument("--expect-acks", help="with --broadcast: addresses that must ack, "
+                                              "e.g. 1,2 (default: the configured addr)")
     hp = hs.add_parser("status", help="one 0x40 request, decoded burst (read-only)")
     hcommon(hp)
     hp = hs.add_parser("info", help="0x50 + e-label: nominal current, serial, versions, "
@@ -1060,23 +1175,39 @@ def build_parser() -> argparse.ArgumentParser:
     hp.add_argument("--apply", action="store_true", help="really send")
     hp.add_argument("--no-verify", action="store_true",
                     help="skip the measurement check after --apply")
+    htarget(hp)
     hcommon(hp)
     hp = hs.add_parser("calibrate-current", help="find which current scale this unit "
                                                  "obeys (needs a load > --test-a)")
     hp.add_argument("--test-a", type=float, default=5.0)
     hcommon(hp)
     hp = hs.add_parser("hold", help="keep-alive loop: status 1 s, re-send setpoints 5 s, "
-                                    "CHANGE lines; Ctrl+C stops")
+                                    "CHANGE lines; Ctrl+C stops; --poll-only / "
+                                    "--silence-after measure the fallback")
     hp.add_argument("--voltage", type=float)
     hp.add_argument("--current", type=float)
     hp.add_argument("--duration", type=float)
+    hp.add_argument("--poll-only", action="store_true",
+                    help="status requests only, never a set frame (B3.4: does polling "
+                         "keep the unit online?)")
+    hp.add_argument("--silence-after", type=float, metavar="S",
+                    help="after S s stop transmitting and only listen for --observe s: "
+                         "time to output-disabled / zero current (B3.1, B4, B6)")
+    hp.add_argument("--observe", type=float, default=120.0,
+                    help="listen window after --silence-after (default 120 s)")
+    hp.add_argument("--tap", metavar="PORT",
+                    help="listen-only second channel (e.g. can:gs:0.1) the silence "
+                         "measurement is taken from; recorded in the same session")
+    htarget(hp)
     hcommon(hp)
     hp = hs.add_parser("caps", help="show/set hard caps and the current scale in "
                                     ".rsh-config.json (no bus access)")
     hp.add_argument("--voltage-max", type=float)
     hp.add_argument("--current-max", type=float)
-    hp.add_argument("--current-scale", help="ratio1024 | x20 | x30 | none")
-    hp.add_argument("--nominal-a", type=float)
+    hp.add_argument("--current-scale", help="ratio1024 | x20 | x30 | none (per serial)")
+    hp.add_argument("--nominal-a", type=float, help="per serial")
+    hp.add_argument("--serial", help="12-hex serial the scale/nominal belong to (from "
+                                     "`info`); default: the serial bound to --addr")
     hcommon(hp, bus=False)
     hp = hs.add_parser("sim", help="simulated R48xx PSU on a CAN link (bench substitute)")
     hp.add_argument("--nominal-a", type=float, default=52.0)
@@ -1087,6 +1218,20 @@ def build_parser() -> argparse.ArgumentParser:
     hp.add_argument("--duration", type=float)
     hp.add_argument("--online-timeout", type=float, default=60.0,
                     help="s without a command before the sim reverts to defaults")
+    hp.add_argument("--default-current-a", type=float,
+                    help="non-volatile current limit (reg 0x04) at start; default nominal")
+    hp.add_argument("--serial", default="0000000000A1", help="12-hex serial of this unit")
+    hp.add_argument("--polls-refresh-timeout", choices=["yes", "no"], default="yes",
+                    help="do 0x40 status requests keep the unit online (yes) or only "
+                         "0x80 sets (no)? - the B3.4 question")
+    hp.add_argument("--reject-zero-default-current", action="store_true",
+                    help="ack a default-current write of 0 with 0x21 (the B3.0 FAIL case)")
+    hp.add_argument("--on-ac-loss", choices=["reset", "keep"], default="reset",
+                    help="whether on-line values survive an AC loss (sources disagree)")
+    hp.add_argument("--ac-off-after", type=float, metavar="S", help="drop AC after S s")
+    hp.add_argument("--ac-on-after", type=float, metavar="S", help="restore AC after S s")
+    hp.add_argument("--negotiate", action="store_true",
+                    help="emit the power-up address negotiation (30 01 x3, 30 02 x8)")
     hcommon(hp)
     p.set_defaults(fn=cmd_huawei)
 
@@ -1197,6 +1342,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--service-device", type=int, default=0,
                    help="Modbus device id = pack number - 1 (default 0)")
     p.add_argument("--service-interval", type=float, default=2.0, help="s")
+    p.add_argument("--label", help="appended to the session file name (e.g. B5.1-<serial>)")
     common(p)
     p.set_defaults(fn=cmd_sniff)
 

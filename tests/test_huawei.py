@@ -202,10 +202,13 @@ def test_set_error_ack_is_reported_not_hidden(bench):
 def test_current_setpoint_with_scale_and_cap(bench):
     bus, sess, sim, ctl = bench
     hc = huawei_config({"huawei": {"caps": {"voltage_max": 55.2, "current_max": 30},
-                                   "current_scale": "ratio1024", "nominal_a": 52.0}})
+                                   "units": {"0000000000A1": {"addr": 1, "nominal_a": 52.0,
+                                                              "current_scale": "ratio1024"}},
+                                   "addr_map": {"1": "0000000000A1"}}})
     cl = HuaweiClient(ctl, sess, "can", 1, hc)
     rep = cl.set_points(None, 10.0, apply=True)
     assert rep["result"] == "applied" and rep["plan"][0]["raw"] == round(10 / 52 * 1024)
+    assert rep["identity"] == []                     # serial on addr 1 checked before sending
     time.sleep(0.05)
     snap = cl.status()
     assert snap["out_current_a"] == pytest.approx(10.0, abs=0.05)     # limited
@@ -357,10 +360,13 @@ def test_rsh_huawei_cli_caps_status_set(tmp_path, monkeypatch, capsys):
     from rs485harness import runner, cli
     monkeypatch.setattr(runner, "CONFIG_PATH", tmp_path / "cfg.json")
     assert cli.main(["huawei", "caps", "--voltage-max", "54.0", "--current-max", "20",
-                     "--current-scale", "ratio1024", "--nominal-a", "52"]) == 0
+                     "--current-scale", "ratio1024", "--nominal-a", "52",
+                     "--serial", "0000000000A1"]) == 0
     cfg = json.loads((tmp_path / "cfg.json").read_text())
     assert cfg["huawei"]["caps"] == {"voltage_max": 54.0, "current_max": 20}
-    assert cli.main(["huawei", "caps", "--current-scale", "bogus"]) == 2
+    assert cfg["huawei"]["units"]["0000000000A1"]["current_scale"] == "ratio1024"
+    assert cli.main(["huawei", "caps", "--current-scale", "bogus", "--serial", "0000000000A1"]) == 2
+    assert cli.main(["huawei", "caps", "--current-scale", "x20"]) == 2      # no serial bound yet
     name = f"cli2-{int(time.time() * 1000)}"
     bus = C.VirtualCanBus.get(name)
     sess = SessionWriter(tmp_path / "sim.jsonl")
@@ -373,6 +379,15 @@ def test_rsh_huawei_cli_caps_status_set(tmp_path, monkeypatch, capsys):
                          "--session", str(tmp_path / "st.jsonl")]) == 0
         out = json.loads(capsys.readouterr().out)
         assert out["status"]["complete"] and out["status"]["out_voltage_v"] == 53.5
+        assert cli.main(["huawei", "info", "--port", port, "--json", "--label", "B1.1/x",
+                         "--session", str(tmp_path / "info.jsonl")]) == 0
+        out = json.loads(capsys.readouterr().out)
+        assert out["info"]["bound"] == {"serial_hex": "0000000000A1", "addr": 1}
+        cfg = json.loads((tmp_path / "cfg.json").read_text())
+        assert cfg["huawei"]["addr_map"] == {"1": "0000000000A1"}
+        assert "_migrated" not in cfg["huawei"]
+        sm = [r for r in read_session(tmp_path / "info.jsonl") if r.get("kind") == "summary"]
+        assert sm and sm[0]["summary"]["label"] == "B1.1/x" and sm[0]["summary"]["sub"] == "info"
         # dry run: nothing reaches the sim
         assert cli.main(["huawei", "set", "--port", port, "--voltage", "52.5", "--json",
                          "--session", str(tmp_path / "set.jsonl")]) == 0
@@ -393,3 +408,350 @@ def test_rsh_huawei_cli_caps_status_set(tmp_path, monkeypatch, capsys):
     finally:
         sim.stop()
         sess.close()
+
+
+# ======================================================= Phase B additions
+# (Harness_Additions_rsh_huawei.md A1-A5). Fake clock: the loops in the
+# client and the simulator run on `clk`, reply windows stay real, so a
+# "2 s" timeout costs ~0.1 s of wall time.
+class FakeClock:
+    def __init__(self, speed: float = 20.0, start: float = 1000.0):
+        self.now = start
+        self.speed = speed
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, dt: float) -> None:
+        self.now += dt
+        time.sleep(dt / self.speed)
+
+    def advance_until(self, t: float, step: float = 0.05) -> None:
+        while self.now < t:
+            self.sleep(step)
+
+
+SERIAL_A, SERIAL_B = "0000000000A1", "0000000000B2"
+
+
+def bound_cfg(serial=SERIAL_A, addr=1, scale="ratio1024", nominal=52.0, current_max=30.0):
+    """A config where `info` + `calibrate-current` already ran for one unit."""
+    return huawei_config({"huawei": {
+        "caps": {"voltage_max": 55.2, "current_max": current_max},
+        "units": {serial: {"addr": addr, "nominal_a": nominal, "current_scale": scale}},
+        "addr_map": {str(addr): serial}}})
+
+
+def fake_bench(tmp_path, clk, **sim_kw):
+    bus = C.VirtualCanBus(f"fb-{int(time.time() * 1000)}-{id(clk)}")
+    sess = SessionWriter(tmp_path / "s.jsonl")
+    kw = dict(addr=1, nominal_a=52.0, scale="ratio1024", load_ohm=2.0, timeout_s=2.0,
+              unsol_period_s=0.1, clock=clk, tick_s=0.005)
+    kw.update(sim_kw)
+    sim = HuaweiPsuSimulator(bus.end("psu", I.BITRATE), sess, **kw)
+    sim.start()
+    return bus, sess, sim
+
+
+# ---------------------------------------------------------------- A5
+def test_persist_zero_current_refused_is_reported_as_fail(tmp_path):
+    """B3.0 FAIL criterion: a unit that acks `default_current = 0` with 0x21
+    must surface exactly that, not an 'applied'."""
+    clk = FakeClock()
+    bus, sess, sim = fake_bench(tmp_path, clk, reject_zero_default_current=True)
+    try:
+        cl = HuaweiClient(bus.end("ctl", I.BITRATE), sess, "can", 1, bound_cfg(),
+                          clock=clk, sleep=clk.sleep)
+        rep = cl.set_points(None, 0.0, apply=True, persist=True)
+        assert rep["result"] == "error"
+        s = rep["sent"][0]
+        assert s["name"] == "default_current" and s["raw"] == 0 and s["acked"]
+        assert s["ok"] is False and s["acks"][1]["status_byte"] == 0x21
+        assert sim.default_i_raw != 0 and sim.stats["set_errors"] == 1
+        # the ordinary unit accepts it
+        sim.reject_zero_default_current = False
+        rep = cl.set_points(None, 0.0, apply=True, persist=True)
+        assert rep["result"] == "applied" and sim.default_i_raw == 0
+        summaries = [r for r in read_session(sess.path) if r.get("kind") == "summary"]
+        assert not summaries                     # set writes none itself; the CLI does
+    finally:
+        sim.stop(); sess.close()
+
+
+def test_defaults_survive_power_cycle_and_apply_before_any_write(tmp_path):
+    """B3.2 / B3.5: after a power cycle the non-volatile defaults (52.4 V,
+    0 A) are what the unit runs, with CAN silent, until a live write."""
+    clk = FakeClock()
+    bus, sess, sim = fake_bench(tmp_path, clk, load_ohm=None, battery_v=48.0)
+    try:
+        cl = HuaweiClient(bus.end("ctl", I.BITRATE), sess, "can", 1, bound_cfg(),
+                          clock=clk, sleep=clk.sleep)
+        assert cl.set_points(52.4, 0.0, apply=True, persist=True)["result"] == "applied"
+        assert cl.set_points(52.0, 10.0, apply=True, verify=False)["result"] == "applied"
+        assert sim.online and sim.measure()[1] == pytest.approx(10.0, abs=0.01)
+        sim.power_cycle()
+        assert not sim.online and sim.default_v == pytest.approx(52.4, abs=0.001)
+        assert sim.default_i_raw == 0
+        v, i = sim.measure()
+        assert i == 0.0 and v == pytest.approx(48.0, abs=0.01)   # battery voltage, no charge
+        snap = cl.status()                         # a status poll does not resume the old limit
+        assert snap["out_current_a"] == 0.0 and snap["current_limit_ratio"] == 0.0
+        assert cl.set_points(None, 10.0, apply=True)["result"] == "applied"
+        assert sim.measure()[1] == pytest.approx(10.0, abs=0.01)
+        notes = [r for r in read_session(sess.path) if r.get("kind") == "note"
+                 and r.get("serial_hex") == SERIAL_A]
+        assert any("power cycle" in r["note"] for r in notes)
+    finally:
+        sim.stop(); sess.close()
+
+
+@pytest.mark.parametrize("mode", ["reset", "keep"])
+def test_ac_loss_reading_is_selectable(tmp_path, mode):
+    clk = FakeClock()
+    bus, sess, sim = fake_bench(tmp_path, clk, on_ac_loss=mode)
+    try:
+        cl = HuaweiClient(bus.end("ctl", I.BITRATE), sess, "can", 1, bound_cfg(),
+                          clock=clk, sleep=clk.sleep)
+        assert cl.set_points(52.0, None, apply=True, verify=False)["result"] == "applied"
+        sim.set_ac(False)
+        for _ in range(20):                       # until the sim thread emitted a heartbeat
+            clk.sleep(0.2)
+            snap = cl.status()
+            if cl.last_unsol[1][0]["output_disabled"]:
+                break
+        assert snap["out_voltage_v"] == 0.0 and "input-power-failure" in snap["status_flags"]
+        assert cl.last_unsol[1][0]["output_disabled"]
+        sim.set_ac(True)
+        assert sim.setpoint_v() == (53.5 if mode == "reset" else 52.0)
+        assert sim.stats["ac_losses"] == 1
+    finally:
+        sim.stop(); sess.close()
+
+
+# ---------------------------------------------------------------- A1
+def test_hold_poll_only_keeps_online_when_polls_refresh(tmp_path):
+    clk = FakeClock()
+    bus, sess, sim = fake_bench(tmp_path, clk, default_current_a=0.0, polls_refresh_timeout=True)
+    try:
+        cl = HuaweiClient(bus.end("ctl", I.BITRATE), sess, "can", 1, bound_cfg(),
+                          clock=clk, sleep=clk.sleep)
+        assert cl.set_points(None, 5.0, apply=True)["result"] == "applied"
+        events = []
+        cl.on_event = events.append
+        stats = cl.hold(None, None, duration=3.5, status_period=0.25, poll_only=True)
+        assert stats["poll_only"] and stats["resends"] == 0 and stats["status_polls"] >= 12
+        assert stats["first_offline_s"] is None and not stats.get("stop_reason")
+        assert sim.online and sim.stats["reverts"] == 0 and sim.stats["sets"] == 1
+        assert sim.measure()[1] == pytest.approx(5.0, abs=0.05)     # raw 98/1024*52
+        assert not any("OFFLINE-TRANSITION" in e for e in events)
+        # poll-only refuses setpoints; the summary record carries the result
+        assert cl.hold(52.0, None, duration=0.1, poll_only=True)["refusals"]
+        sm = [r for r in read_session(sess.path) if r.get("kind") == "summary"]
+        assert sm and sm[0]["summary"]["first_offline_s"] is None and sm[0]["summary"]["poll_only"]
+    finally:
+        sim.stop(); sess.close()
+
+
+def test_hold_poll_only_reports_offline_when_only_sets_refresh(tmp_path):
+    clk = FakeClock()
+    bus, sess, sim = fake_bench(tmp_path, clk, default_current_a=0.0, polls_refresh_timeout=False)
+    try:
+        cl = HuaweiClient(bus.end("ctl", I.BITRATE), sess, "can", 1, bound_cfg(),
+                          clock=clk, sleep=clk.sleep)
+        assert cl.set_points(None, 5.0, apply=True)["result"] == "applied"
+        t_set = clk.now
+        events = []
+        cl.on_event = events.append
+        stats = cl.hold(None, None, duration=3.5, status_period=0.25, poll_only=True)
+        assert stats["first_offline_s"] is not None
+        # the sim's 2 s timeout counts from the set frame; the hold started right after it
+        t_off = stats["first_offline_s"] + (clk.now - 3.5 - t_set)
+        assert 1.9 <= stats["first_offline_s"] <= 2.6, (stats, t_off)
+        assert "0x81" in stats["offline_evidence"]
+        assert sim.stats["reverts"] == 1 and not sim.online
+        assert sum("OFFLINE-TRANSITION" in e for e in events) == 1
+        assert any("CHANGE out_current_a" in e for e in events)
+        notes = [r for r in read_session(sess.path) if r.get("first_offline_s") is not None]
+        assert notes and notes[0]["first_offline_s"] == stats["first_offline_s"]
+    finally:
+        sim.stop(); sess.close()
+
+
+# ---------------------------------------------------------------- A2
+def test_silence_after_measures_fallback_time(tmp_path):
+    clk = FakeClock()
+    bus, sess, sim = fake_bench(tmp_path, clk, default_current_a=0.0)
+    try:
+        cl = HuaweiClient(bus.end("ctl", I.BITRATE), sess, "can", 1, bound_cfg(),
+                          clock=clk, sleep=clk.sleep)
+        events = []
+        cl.on_event = events.append
+        stats = cl.hold(52.0, 5.0, duration=None, status_period=0.25, resend_period=1.0,
+                        silence_after=1.0, observe_s=4.0)
+        assert stats["resends"] >= 1 and stats["status_polls"] >= 3
+        assert stats["reminder"].startswith("reminder")
+        sl = stats["silence"]
+        assert sl["measured_on"] == "can" and sl["load_raw_before_silence"] > 0
+        # fallback 2 s after the last frame addressed to the unit (+ tick granularity)
+        assert sl["t_zero_current"] is not None and 1.9 <= sl["t_zero_current"] <= 2.6, sl
+        assert sl["residual_current_a"] == 0.0 and sl["residual_load_raw"] == 0
+        assert sl["t_first_output_disabled"] is None     # the sim never claims that byte - null, not guessed
+        assert sl["unsolicited_period_s"] is not None and 0.05 <= sl["unsolicited_period_s"] <= 0.3
+        assert sl["frames"] >= 20 and sl["other_controller_frames"] == 0
+        assert sim.stats["reverts"] == 1
+        recs = [r for r in read_session(sess.path) if r.get("mode") == "silence" and r.get("kind") == "can"]
+        assert recs and all(r["dir"] == "rx" and "t_since_last_tx" in r for r in recs)
+        assert all(r["chan"] == "can" for r in recs)
+        tx_after = [r for r in read_session(sess.path) if r.get("dir") == "tx"
+                    and r["chan"] == "can" and r["t"] > recs[0]["t"]]
+        assert not tx_after                                # nothing transmitted during silence
+        sm = [r for r in read_session(sess.path) if r.get("kind") == "summary"]
+        assert sm[-1]["summary"]["silence"]["t_zero_current"] == sl["t_zero_current"]
+        assert any(e.startswith("SILENCE result") for e in events)
+    finally:
+        sim.stop(); sess.close()
+
+
+def test_silence_after_uses_tap_channel_timestamps(tmp_path):
+    import threading
+    clk = FakeClock()
+    bus, sess, sim = fake_bench(tmp_path, clk, default_current_a=0.0, timeout_s=10.0)
+    try:
+        ctl = bus.end("ctl", I.BITRATE)
+        tap = bus.end("tap", I.BITRATE, listen_only=True)
+        cl = HuaweiClient(ctl, sess, "can", 1, bound_cfg(), clock=clk, sleep=clk.sleep)
+        t0 = clk.now
+
+        def ac_off():                     # AC drops 1.5 s into the silence
+            clk_target = t0 + 1.0 + 1.5
+            while clk.now < clk_target:
+                time.sleep(0.002)
+            sim.set_ac(False)
+        th = threading.Thread(target=ac_off, daemon=True)
+        th.start()
+        stats = cl.hold(52.0, 5.0, duration=None, status_period=0.25, resend_period=1.0,
+                        silence_after=1.0, observe_s=3.0, tap_link=tap, tap_chan="tap")
+        th.join(timeout=2)
+        sl = stats["silence"]
+        assert sl["measured_on"] == "tap"
+        assert sl["t_first_output_disabled"] is not None and 1.2 <= sl["t_first_output_disabled"] <= 2.2, sl
+        assert sl["t_zero_current"] is not None and sl["t_zero_current"] >= sl["t_first_output_disabled"] - 0.2
+        assert sl["residual_current_a"] == 0.0
+        recs = list(read_session(sess.path))
+        sil = [r for r in recs if r.get("mode") == "silence" and r.get("kind") == "can"]
+        assert sil and {r["chan"] for r in sil} == {"tap"}
+        # the controller link was drained into the same session but not measured
+        assert any(r["chan"] == "can" and r["dir"] == "rx" and r["t"] >= sil[0]["t"] for r in recs)
+        assert tap.listen_only
+    finally:
+        sim.stop(); sess.close()
+
+
+# ---------------------------------------------------------------- A3
+def two_units(tmp_path, clk):
+    bus = C.VirtualCanBus(f"two-{int(time.time() * 1000)}")
+    sess = SessionWriter(tmp_path / "two.jsonl")
+    kw = dict(nominal_a=52.0, scale="ratio1024", load_ohm=2.0, timeout_s=5.0,
+              unsol_period_s=0.2, clock=clk, tick_s=0.005)
+    s1 = HuaweiPsuSimulator(bus.end("psu1", I.BITRATE), sess, addr=1, serial_hex=SERIAL_A,
+                            chan="psu1", **kw)
+    s2 = HuaweiPsuSimulator(bus.end("psu2", I.BITRATE), sess, addr=2, serial_hex=SERIAL_B,
+                            chan="psu2", **kw)
+    s1.start(); s2.start()
+    return bus, sess, s1, s2
+
+
+def test_broadcast_set_waits_for_every_expected_ack(tmp_path):
+    clk = FakeClock()
+    bus, sess, s1, s2 = two_units(tmp_path, clk)
+    try:
+        cl = HuaweiClient(bus.end("ctl", I.BITRATE), sess, "can", 1, huawei_config({}),
+                          target_addr=0, expect_acks=[1, 2], clock=clk, sleep=clk.sleep)
+        assert cl.broadcast and cl.target_label() == "broadcast"
+        rep = cl.set_points(52.0, None, apply=True)
+        assert rep["result"] == "applied" and "verify" not in rep, rep
+        s = rep["sent"][0]
+        assert s["id"] == "0x108080FE" and s["target"] == "broadcast"
+        assert sorted(s["acks"]) == [1, 2] and s["missing_acks"] == []
+        assert s1.online_v == 52.0 and s2.online_v == 52.0
+        tx = [r for r in read_session(sess.path) if r.get("dir") == "tx" and r["chan"] == "can"]
+        assert tx[-1]["target"] == "broadcast" and tx[-1]["expect_acks"] == [1, 2]
+        # a unit that does not answer is an error, like a rejected setpoint
+        cl3 = HuaweiClient(bus.end("ctl3", I.BITRATE), sess, "can", 1, huawei_config({}),
+                           target_addr=0, expect_acks=[1, 2, 3], clock=clk, sleep=clk.sleep)
+        rep = cl3.set_points(51.0, None, apply=True)
+        assert rep["result"] == "error" and rep["sent"][0]["missing_acks"] == [3]
+        assert rep["sent"][0]["ok"] is False and "addr [3]" in rep["sent"][0]["error"]
+        assert s1.online_v == 51.0                    # the frame itself did go out
+        # broadcast current: both units must be bound and share (scale, nominal)
+        hc = bound_cfg()
+        from rs485harness.analyzer.huawei import bind_unit
+        bind_unit(hc, SERIAL_B, 2, 35.0, "ratio1024")
+        clb = HuaweiClient(bus.end("ctlb", I.BITRATE), sess, "can", 1, hc,
+                           target_addr=0, expect_acks=[1, 2], clock=clk, sleep=clk.sleep)
+        rep = clb.set_points(None, 5.0, apply=True)
+        assert rep["result"] == "refused" and "do not share" in rep["refusals"][0]
+        bind_unit(hc, SERIAL_B, 2, 52.0, "ratio1024")
+        rep = clb.set_points(None, 5.0, apply=True)
+        assert rep["result"] == "applied" and s1.online_i_raw == s2.online_i_raw == round(5 / 52 * 1024)
+    finally:
+        s1.stop(); s2.stop(); sess.close()
+
+
+def test_per_unit_set_reaches_only_its_addr(tmp_path):
+    clk = FakeClock()
+    bus, sess, s1, s2 = two_units(tmp_path, clk)
+    try:
+        cl2 = HuaweiClient(bus.end("ctl", I.BITRATE), sess, "can", 2, huawei_config({}),
+                           clock=clk, sleep=clk.sleep)
+        rep = cl2.set_points(51.0, None, apply=True)
+        assert rep["result"] == "applied" and rep["target"] == "addr:2"
+        assert rep["sent"][0]["id"] == "0x108280FE" and list(rep["sent"][0]["acks"]) == [2]
+        assert s2.online_v == 51.0 and s1.online_v == 53.5 and not s1.online
+        assert rep["verify"]["verified"] and rep["verify"]["measured_v"] == 51.0
+        assert cl2.status()["out_voltage_v"] == 51.0
+        info = cl2.info()
+        assert info["serial_hex"] == SERIAL_B and info["bound"] == {"serial_hex": SERIAL_B, "addr": 2}
+        assert cl2.hcfg["addr_map"] == {"2": SERIAL_B}
+        tx = [r for r in read_session(sess.path) if r.get("dir") == "tx" and r["chan"] == "can"]
+        assert tx and all(r["target"] == "addr:2" for r in tx)
+    finally:
+        s1.stop(); s2.stop(); sess.close()
+
+
+def test_scale_is_bound_to_serial_not_addr(tmp_path):
+    clk = FakeClock()
+    bus, sess, s1, s2 = two_units(tmp_path, clk)
+    try:
+        hc = bound_cfg()                               # serial A calibrated, on addr 1
+        cl = HuaweiClient(bus.end("ctl", I.BITRATE), sess, "can", 1, hc, clock=clk, sleep=clk.sleep)
+        assert cl.set_points(None, 5.0, apply=True)["result"] == "applied"
+        assert s1.online_i_raw == round(5 / 52 * 1024)
+        # the units swap addresses (renegotiation): B now answers on 1
+        s1.set_addr(3); s2.set_addr(1); s1.set_addr(2)
+        rep = cl.set_points(None, 5.0, apply=True)
+        assert rep["result"] == "refused" and "serial changed" in rep["refusals"][0], rep
+        assert f"{SERIAL_A} -> {SERIAL_B}" in rep["refusals"][0]
+        assert s2.online_i_raw == s2.default_i_raw        # nothing was sent
+        # after info: addr 1 = serial B, which has no scale -> still refused, different reason
+        info = cl.info()
+        assert info["addr_change"] == {"addr": 1, "was": SERIAL_A, "now": SERIAL_B}
+        assert hc["addr_map"] == {"1": SERIAL_B} and hc["units"][SERIAL_A]["current_scale"] == "ratio1024"
+        rep = cl.set_points(None, 5.0, apply=True)
+        assert rep["result"] == "refused" and "not established" in rep["refusals"][0]
+        # serial A, now on addr 2, keeps its scale: a client for addr 2 can use it after info
+        cl2 = HuaweiClient(bus.end("ctl2", I.BITRATE), sess, "can", 2, hc, clock=clk, sleep=clk.sleep)
+        assert cl2.info()["serial_hex"] == SERIAL_A and hc["addr_map"] == {"1": SERIAL_B, "2": SERIAL_A}
+        assert cl2.set_points(None, 5.0, apply=True)["result"] == "applied"
+        assert s1.online_i_raw == round(5 / 52 * 1024)
+    finally:
+        s1.stop(); s2.stop(); sess.close()
+
+
+def test_config_migration_of_flat_scale():
+    hc = huawei_config({"huawei": {"current_scale": "x20", "nominal_a": 52.0,
+                                   "caps": {"current_max": 10}}})
+    assert hc["legacy"] == {"current_scale": "x20", "nominal_a": 52.0} and hc["_migrated"]
+    assert "current_scale" not in hc and hc["units"] == {} and hc["addr_map"] == {}
+    assert "_migrated" not in huawei_config({"huawei": {k: v for k, v in hc.items()
+                                                        if not k.startswith("_")}})

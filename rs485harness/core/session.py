@@ -73,6 +73,11 @@ class SessionWriter:
     def note(self, text: str, chan: str = "-", **extra) -> None:
         self.log(chan, "-", b"", kind="note", note=text, **extra)
 
+    def summary(self, data: dict, chan: str = "-", **extra) -> None:
+        """One `kind="summary"` record with a tool's measured numbers, so a
+        report can be assembled from summaries alone (Phase B record)."""
+        self.log(chan, "-", b"", kind="summary", summary=data, **extra)
+
     MARK_SHORTHAND = {
         "": "(enter)", "r": "rebound/current-rise", "o": "ovwarn=1",
         "l": "inverter_red_led", "z": "current=0", "s": "start", "e": "end",
