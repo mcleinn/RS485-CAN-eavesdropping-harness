@@ -1,7 +1,7 @@
 [project]
 name = "rs485harness"
 version = "0.1.0"
-description = "RS485 test harness for inverter/BMS protocols (Pylontech ASCII, Voltronic, Seplos): analyzer, bridge, simulators"
+description = "RS485 / CAN eavesdropping harness for battery, inverter and charger buses: identify, discover, sniff, timeline, bridge/gateway, charger control, simulators"
 requires-python = ">=3.11"
 dependencies = ["pyserial>=3.5", "libusb1>=3.0"]
 
