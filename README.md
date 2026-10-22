@@ -30,10 +30,20 @@ driven over libusb from the descriptor `termux-usb` hands over; see
   can:gs:0` sweeps 500/250/125 kbit/s listen-only and names what talks
   (Huawei R48xx PSU, Pylontech-CAN battery, inverter keep-alive, wrong
   bitrate). **`rsh huawei`** controls a Huawei R4850G2/R48xx rectifier:
-  `status`, `info`, `calibrate-current` (the disputed current scale is
-  measured per unit, never assumed), `set` (dry run unless `--apply`,
-  hard caps in `.rsh-config.json`, verified by measurement), `hold`
-  (keep-alive loop), `sim` (bench substitute). Battery side: the
+  `status`, `info` (binds the unit's serial to its bus address),
+  `calibrate-current` (the disputed current scale is measured per unit and
+  stored under its **serial**, never assumed, never carried to another
+  address), `set` (dry run unless `--apply`, hard caps in
+  `.rsh-config.json`, verified by measurement; `--broadcast --expect-acks
+  1,2` for all units at once, every ack checked), `hold` (keep-alive loop;
+  `--poll-only` and `--silence-after S [--tap can:gs:0.1]` measure the
+  unit's fallback to its stored defaults instead of guessing it), `sim`
+  (bench substitute with the Phase B switches: polls-refresh-timeout,
+  reject-zero-default-current, AC loss modes, power cycle, address
+  negotiation). `rsh sniff` on a CAN tap reports Huawei address
+  negotiation and address changes (`ADDR-NEG`/`ADDR-CHANGE`); `--label`
+  names the capture file; every tool ends its session with a `summary`
+  record. Bench procedure: `docs/PHASE-B-RUNBOOK.md`. Battery side: the
   Pylontech-CAN family (Pylontech LV, Victron CAN-bus BMS, Dyness
   "DYNESS-L" incl. its native 0x18BB/0x18AA frames, LuxPower, Seplos CAN)
   is decoded, simulated (`battery-sim`/`inverter-sim --can-profile`), and
@@ -110,7 +120,7 @@ driven over libusb from the descriptor `termux-usb` hands over; see
 
 ```
 pip install -e ".[dev]"
-python -m pytest          # 170 tests, all hardware-free
+python -m pytest          # 186 tests, all hardware-free
 rsh demo                  # sim inverter vs sim battery over loopback
 rsh menu                  # interactive runner (concurrent jobs per channel)
 rsh tui                   # full-screen UI (pip install -e ".[tui]")
@@ -120,6 +130,8 @@ rsh identify --port can:gs:0 --passive-only   # CAN: who talks, at which bitrate
 rsh huawei caps --voltage-max 55.2 --current-max 20   # hard caps before any set
 rsh huawei status --port can:gs:0             # R4850G2: decoded status burst
 rsh huawei set --port can:gs:0 --voltage 52.5 # dry run; add --apply to send
+rsh huawei hold --port can:gs:0 --voltage 52.4 --current 5 --silence-after 30 --tap can:gs:0.1
+                                              # measure the fallback after CAN silence
 ```
 
 ## Documentation
@@ -130,6 +142,7 @@ rsh huawei set --port can:gs:0 --voltage 52.5 # dry run; add --apply to send
 - `docs/CHARGE-TAPER-PLAN.md` — the Seplos↔SAKO charge-rebound
   investigation: hypotheses, capability map, Phase-1 capture plan,
   Phase-2 policy principle and fail-safes
+- `docs/PHASE-B-RUNBOOK.md` — Huawei R4850G2 bench qualification: the exact `rsh` command per Phase B test ID (adapter check, identity, control, zero-current fallback, failure behaviour, two units, timing)
 - `docs/CAN-PLAN.md` — CAN bus: the USBCANFD DUAL adapter and its firmwares, bus parameters of Huawei R48xx / Pylontech / Victron / Dyness / LuxPower, the integration plan (same commands, protocol by port kind), first test = Huawei R4850G2 control
 - `docs/USAGE.md` — tool reference + diagnosis strategy/playbook
 - `docs/PROTOCOL-NOTES.md` — condensed protocol ground truth (frame format,
