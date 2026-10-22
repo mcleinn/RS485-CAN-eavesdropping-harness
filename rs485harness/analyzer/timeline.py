@@ -237,6 +237,10 @@ def build_timeline(path: Path | str, cfg: TimelineConfig | None = None,
             svc_samples.append({"t": round(t, 4), "t_rel": round(t - t0, 3),
                                 **(r.get("decoded") or {})})
             continue
+        if r.get("kind") == "addr_event":
+            ev(t, "addr", r.get("text") or r.get("event"), event=r.get("event"),
+               serial=r.get("serial"))
+            continue
         if r.get("kind") == "service-settings":
             if r.get("changed"):
                 ev(t, "svc-setting", r.get("note") or "setting changed")
