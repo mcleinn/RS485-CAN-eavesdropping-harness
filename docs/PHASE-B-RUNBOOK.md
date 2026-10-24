@@ -163,8 +163,8 @@ Consolidated technical notes on the units themselves: `docs/CHARGER-HUAWEI-UNITS
   address 1**, unsolicited `0x1001117E` every 0.377 s, `0x108111FE` every
   0.377 s, `0x100011FE` every 3 s, no error frames at 125 k. **But the bus
   is not quiet: the charger carries an add-on control board (display
-  front-end, exact type unconfirmed; it did not react to presses) that is a
-  CAN controller.** Every 0.62 s it sends a status request and then, within
+  front-end, exact type unconfirmed; its main screen did not react to presses)
+  that is a CAN controller.** Every 0.62 s it sends a status request and then, within
   10 ms, five writes: default voltage 49.98 V (raw 0xC7ED), default current
   raw 210, online voltage 47.98 V (raw 0xBFEE, sent twice), standby = 0
   (on), online current raw 70; every 3 s a broadcast `0x108081FE 01 13 00
