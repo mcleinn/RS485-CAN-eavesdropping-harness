@@ -79,6 +79,32 @@ AC input (226 V), or the simulator. Register 0x75 (output voltage) read
   Web searches for the screen's UI wording, the Bluetooth name and the
   frame header found nothing.
 
+### 3.1.1 The board itself (photo of the opened front plate, 2026-10-25)
+
+- Small custom PCB glued into the front plate with silicone, behind the
+  fan grille. MCU: bare **ESP32-C3** (Espressif QFN, PCB-trace antenna,
+  40 MHz crystal) - WiFi + Bluetooth LE only, one CAN controller. Next to
+  it an 8-pin SOIC = the CAN transceiver; a small 8-pin device U6 (EEPROM
+  or similar); a 1 uH inductor with a switching regulator = the board
+  steps its supply down itself. Four unpopulated programming pads.
+- **One 4-pin connector is the board's entire connection**: yellow +
+  green (twisted, CAN pair to the module's rear connector) and red +
+  black (supply from the fan-end auxiliary rail, voltage not yet measured,
+  likely the fan's 12 V).
+- Display: TFT on a single flex into a ZIF socket; no second flex, so
+  **no touch panel** (confirms the screen is display-only).
+- Consequences: the board has **no slot-detect line and no relay drive**,
+  so it cannot switch the module's output except over CAN - of the three
+  candidates for the 0 V output only the CAN ones remain (standby polarity
+  reversed in the tables, or the module simply in standby); the standby
+  register check on the first master run decides. The 4-pin connector is
+  the **clean interception point**: an adapter lead keeps red/black on the
+  module's rail and routes yellow/green to the gateway or repeater channel
+  instead of the module - no cutting, reversible. The same red/black rail
+  can power a T-CAN485 (5-12 V in) once measured. CAN-H/L: trace from the
+  transceiver's pins 7 (CAN-H) / 6 (CAN-L) to the connector, or let the
+  harness tell by trial.
+
 ### 3.2 Screen (photo 2026-10-24 18:35)
 
 | Field (Chinese) | Meaning | Value seen |
