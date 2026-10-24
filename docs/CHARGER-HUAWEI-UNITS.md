@@ -116,10 +116,18 @@ Consequences:
 - The module's **persistent defaults are rewritten every 0.6 s** to 50.0 V
   and raw 210 (10.5 A under ×20). B3.0's zero-current default cannot hold
   while the board is attached.
-- Output 0 V with online 48 V requested and standby = 0 on the bus: the
-  board gates the output by other means (output relay or the slot-detect
-  pins), not through the CAN standby register. The seller's "full-charge
-  shut-off" works the same way.
+- Output 0 V with online 48 V requested and `01 32 00 00` (standby = 0
+  per the community tables) on the bus: **observed; cause unknown.** Three
+  candidates, none verified: (1) the board holds the module's output-enable
+  (slot-detect pins) - cheap, common in these conversions, consistent with
+  the photo of the opened unit (no added relay or board visible besides the
+  display assembly and its four wires: twisted yellow/green CAN pair to the
+  rear connector, red/black power from the fan-end auxiliary rail); (2) a
+  relay in the output path, inside the display assembly or on the unseen
+  side; (3) the standby polarity in the tables is reversed and `01 32 00 00`
+  is the standby command. (3) is settled the first time the harness is the
+  module's only master: write the standby register both ways and watch
+  0x75. Until then: "output was off under the board, cause unknown".
 - With the board transmitting, **no second master may command the module**
   (the harness refused to go active, by rule). The Phase B active tests and
   the Cerbo GX driver need the board silent.
