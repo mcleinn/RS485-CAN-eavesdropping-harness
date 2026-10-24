@@ -16,6 +16,9 @@ disagree, the plan says so and the code must not hard-code one reading.
 
 ## 1. The adapter we have: USBCANFD DUAL (can-module.com)
 
+Bench findings on this board (enumeration, jumpers, the echo-is-not-an-ACK
+behaviour of its firmware) are collected in `docs/ADAPTER-USBCANFD-DUAL.md`.
+
 Identification (high confidence, `docs/refs/can-adapters/NOTES.md` §1): the
 listing matches the **"USBCANFD DUAL"**, SKU CAN-G473-DUAL, by Oleksii
 Mamontov, Ukraine: STM32G473, two FDCAN channels, isolated, upstream Zephyr

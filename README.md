@@ -135,6 +135,9 @@ do not change.
   dialect quirks, cabling / pinouts)
 - `docs/CAN-PLAN.md` — CAN side: adapter and firmwares, bus parameters of
   the supported protocols, the integration design, status
+- `docs/ADAPTER-USBCANFD-DUAL.md` — the USBCANFD DUAL board we use: firmware,
+  enumeration, termination jumpers, measured transmit/ACK behaviour of its
+  firmware and what the harness does about it
 - `docs/PHASE-B-RUNBOOK.md` — bench qualification of a CAN charger, one
   command per test ID
 - `docs/BENCH-CHECKLIST.md` — at-the-bench step card (wiring, exact
