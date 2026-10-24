@@ -186,3 +186,27 @@ typed as markers into the tap; B7.3 = `set --broadcast --expect-acks 1,2
   the output (relay or slot-detect), as several of these boards do.
 - Captures: `captures/20261024-181026-identify.jsonl`,
   `captures/20261024-181052-sniff-charger-with-controller.jsonl`.
+
+### 2026-10-24, later — the front-end identified by class; voltage-scale warning
+
+- The charger matches the hand-built "Huawei big cannon adjustable power
+  supply" conversions sold by individual builders on Xianyu (smzdm article
+  2026-01-10, https://post.smzdm.com/p/ako7rp58/): rewound transformer, new
+  MOSFETs/capacitors, touchscreen + Bluetooth app, full-charge auto
+  shut-off, machined or original housing. The user's unit: black case,
+  slightly different screen, a personal photo at start-up (builder's own
+  firmware image). No maker, no model, no documentation; the board is a
+  one-off CAN master and cannot be silenced or reprogrammed over CAN. The
+  hardware route (lift the transceiver TXD pin so the board becomes
+  receive-only) is the only way to keep the screen with the GX as master.
+- **Warning:** the article's build outputs 71-101 V from a 48 V module (the
+  feedback is moved so the module regulates to a 48 V-class internal reading
+  while the terminals carry ~1.7x). Our unit's CAN values are 48 V-class,
+  which proves nothing. **Before any battery is connected: enable the
+  output, measure the terminals with a meter and compare with 0x75.** Until
+  that is done once, 0x75 is not trusted evidence of the terminal voltage
+  and the verify-by-measurement step needs the meter beside it.
+- The 0 V output seen so far fits these builds: output relay open until a
+  battery is sensed or the app enables it; the touchscreen may be inactive
+  while the output is off, or the controls live in the phone app (a
+  Bluetooth scan with the charger powered would show what it advertises).
