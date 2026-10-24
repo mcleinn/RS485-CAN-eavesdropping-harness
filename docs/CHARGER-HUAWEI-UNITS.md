@@ -65,9 +65,9 @@ AC input (226 V), or the simulator. Register 0x75 (output voltage) read
 
 - **Measured:** an **ESP32-class controller** (Bluetooth address
   80:B5:4E:E6:DD:FA is in Espressif's block) with a colour TFT in the
-  black front panel, Bluetooth LE and WiFi (icons on screen). The screen
-  did not react to touch in any of the user's attempts: treat it as
-  display-only. A personal photo is shown at power-up: the builder's own
+  black front panel, Bluetooth LE and WiFi (icons on screen). The main
+  screen did not react to touch in the user's attempts; the WiFi dialog's
+  Exit button appeared to react once. Touch status unclear (3.1.1). A personal photo is shown at power-up: the builder's own
   firmware image.
 - *Inferred:* a hand-built conversion of the kind sold by individual
   builders on Xianyu ("Huawei big cannon adjustable power supply": rewound
@@ -91,8 +91,13 @@ AC input (226 V), or the simulator. Register 0x75 (output voltage) read
   green (twisted, CAN pair to the module's rear connector) and red +
   black (supply from the fan-end auxiliary rail, voltage not yet measured,
   likely the fan's 12 V).
-- Display: TFT on a single flex into a ZIF socket; no second flex, so
-  **no touch panel** (confirms the screen is display-only).
+- Display: TFT on a single flex into a ZIF socket, no separate touch
+  flex visible. **Touch status unclear:** the main screen never reacted to
+  presses, but the "Exit" button of the "Connect to WIFI" dialog appeared
+  to react once (that dialog also clears by itself after a timeout). A
+  resistive layer can share the single flex and the C3 can read it; check
+  for a milky flexible top sheet over the glass, and whether Exit reacts
+  repeatably.
 - Consequences: the board has **no slot-detect line and no relay drive**,
   so it cannot switch the module's output except over CAN - of the three
   candidates for the 0 V output only the CAN ones remain (standby polarity
