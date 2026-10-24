@@ -136,6 +136,14 @@ Consequences:
 | Traffic | nothing unsolicited in 20 s of listening; FFE1 reads back a constant frame |
 | Frame | `B5 5B 07 00 F1 01 F2` = header `B5 5B`, 16-bit little-endian total length 7, command 0xF1, data 0x01, 8-bit sum checksum (F1 + 01 = F2) |
 
+How to connect for inspection (read-only): `pip install bleak`, then
+`python -X utf8 tools/ble_inspect.py --name HW` (or `--address
+80:B5:4E:E6:DD:FA`). The tool scans, connects without pairing, lists
+services and characteristics, reads what is readable and prints every
+notification for `--listen` seconds; it has no write path. On Android,
+"nRF Connect" shows the same (connect, expand FFE0, enable notifications on
+FFE1).
+
 *Inferred:* request/answer protocol of the builder's own app; "123456" is
 the login sent inside it. **No writes have been attempted**: an unknown
 command could change setpoints or the run state of a 4 kW charger. The way
@@ -183,3 +191,40 @@ known.
   762 frames, the board's command cycle, the module's idle status.
 - Bluetooth probe output: reproduced in section 3.4 (script in the session
   scratchpad, read-only).
+
+## 7. Sources on this kind of modification
+
+Found while identifying the board (2026-10-24). None describes our exact
+unit or its Bluetooth protocol; they describe the class of conversion.
+
+- Seller's listing of our chargers (Ukrainian reseller):
+  https://0088.prom.ua/ua/p3025187059-zaryadnoe-ustrojstvo-universalnoe.html
+- smzdm article on the Xianyu hand-built "Huawei big cannon" conversions
+  (touch + Bluetooth board, machined housing, 71–101 V e-scooter variant):
+  https://post.smzdm.com/p/ako7rp58/
+- yleee forum: changing the module's default output via a 4-wire
+  communication-control board (41–58.5 V, 0–60 A, defaults persist):
+  https://www.yleee.com.cn/thread-62600-1-1.html
+- crystalradio forum: "communication-control conversion to an adjustable
+  charger, simple wiring, default output can be changed" (registration
+  required): http://www.crystalradio.cn/thread-1620930-1-1.html
+- mydigit forum: R4850G2 CAN protocol collection and adjustable-conversion
+  tutorial (registration required, blocks automated fetching):
+  https://www.mydigit.cn/thread-285596-1-1.html ,
+  https://www.mydigit.cn/thread-134438-1-1.html
+- AliExpress "modified adjustable charger" listings of the same class (knobs,
+  no touch): https://www.aliexpress.com/i/1005004827908520.html
+- OpenDTU-OnBattery discussion of output switching via the slot-detect
+  relay ("data set error during relay shutdown"):
+  https://github.com/hoylabs/OpenDTU-OnBattery/discussions/1268
+- Reference CAN controllers (what a well-behaved external master does, and
+  the register tables our decoder follows):
+  https://github.com/patagonaa/huawei-r48xx ,
+  https://github.com/craigpeacock/Huawei_R4850G2_CAN ,
+  https://github.com/mjpalmowski/CAN-BUS-control-R4875G1-with-ESPHome-and-MQTT ,
+  https://github.com/thornung/esphome-huawei-r48xx ,
+  https://github.com/iPuzzle/huawei-r4850g2-web ,
+  https://github.com/BotoX/huawei-r48xx-esp32 ,
+  https://github.com/anwa/esphome-r4875g1-3phase-charger
+- Bluetooth address block lookup (80:B5:4E = Espressif):
+  https://api.macvendors.com/80:B5:4E
