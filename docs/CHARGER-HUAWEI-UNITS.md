@@ -400,6 +400,33 @@ own channel against `rsh huawei sim --addr 2`).
   to fail than to work; the injection test is still worth its hour because
   a negative result on mode 1 saves opening the housing at all.
 
+- **Receive-only with series resistors.** A few kOhm in each line between
+  the board's transceiver and the bus: the board still reads back its own
+  dominant bits (no bit error), the bus sees only tens of mV (recessive),
+  reception through the resistors still works. The failure becomes a
+  missing ACK instead of a bit error, and an error-passive node does not
+  count ACK errors any further - no bus-off (this is what our adapter did
+  with nothing connected: counter pinned at 128). What it does not fix:
+  the unacknowledged frame is retransmitted back to back on the board's
+  private side, and every real frame must arrive in a gap between those
+  retries to be received - the board would miss most of the traffic unless
+  its firmware sends single-shot frames or clears its queue on failure
+  (unknown). Turns a certain failure into a probable one; not a plan.
+- **Dumb repeater (the smallest thing that can ACK).** An acknowledgement
+  is a dominant bit placed in the ACK slot by a receiving CAN controller;
+  no passive part can produce it, but any CAN controller in normal mode on
+  the board's private pair does so for every valid frame without
+  transmitting anything of its own. Add forwarding of every module-bus
+  frame onto that private pair and the board is fully content: it sees the
+  master's requests, the module's replies and heartbeats, and its own
+  frames are absorbed and acknowledged. No protocol knowledge, no master
+  role, no caps, nothing time-critical - the gateway reduced to ~50 lines.
+  Runs on a 5-euro ESP32 with two transceivers or on the DUAL adapter at
+  the Cerbo; with two board channels it can also rewrite the address per
+  board. GX stays the sole master, screens stay live, no surgery on the
+  boards. The strongest candidate for the target system after the plain
+  gateway.
+
 ## 5. Open questions (asked of the seller 2026-10-24)
 
 - How does the unit leave standby; is the screen touch or display only?
