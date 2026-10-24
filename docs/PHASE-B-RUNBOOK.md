@@ -138,6 +138,19 @@ typed as markers into the tap; B7.3 = `set --broadcast --expect-acks 1,2
   the zero-current fallback is itself a Phase B finding, so the simulator does
   not pretend it does and the value may legitimately stay `null`.
 
+## Gateway setup (board kept alive, harness as the module's only master)
+
+Wiring: cut the board's CAN pair from the module; module pair to adapter
+channel 0 (`can:gs:0.0`), board pair to channel 1 (`can:gs:0.1`); both
+termination jumpers closed (each channel is a bus end). Then every active
+test in this runbook runs as before, with `rsh huawei gateway --port
+can:gs:0.0 --front-end can:gs:0.1 ...` in place of `hold` where a
+continuous master is needed (B2.6, B3.x holds, B4): the board keeps
+showing the module's real state and its writes never reach the module.
+Before the gateway's first run: `rsh huawei info --port can:gs:0.0` with
+the board disconnected from channel 0 (binds the serial) and B3.0 once
+the board's last defaults (50.0 V, raw 210) are to be replaced.
+
 ## Bench log
 
 Consolidated technical notes on the units themselves: `docs/CHARGER-HUAWEI-UNITS.md`.

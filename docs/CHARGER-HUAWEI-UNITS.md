@@ -136,19 +136,123 @@ Consequences:
 | Traffic | nothing unsolicited in 20 s of listening; FFE1 reads back a constant frame |
 | Frame | `B5 5B 07 00 F1 01 F2` = header `B5 5B`, 16-bit little-endian total length 7, command 0xF1, data 0x01, 8-bit sum checksum (F1 + 01 = F2) |
 
-How to connect for inspection (read-only): `pip install bleak`, then
+How to connect: `pip install bleak`, then
 `python -X utf8 tools/ble_inspect.py --name HW` (or `--address
-80:B5:4E:E6:DD:FA`). The tool scans, connects without pairing, lists
-services and characteristics, reads what is readable and prints every
-notification for `--listen` seconds; it has no write path. On Android,
-"nRF Connect" shows the same (connect, expand FFE0, enable notifications on
-FFE1).
+80:B5:4E:E6:DD:FA`). That tool is **read-only**: it scans, connects without
+pairing, lists services and characteristics, reads what is readable and
+prints every notification for `--listen` seconds. To *talk* to the board
+(command the FFE2 / reply-FFE1 path in section 3.4.1) use the probe tools
+`tools/ble_probe.py` … `tools/ble_probe6.py` — `ble_probe6.py` is the most
+recent (reads the 0xF9 block before/after each candidate command and reports
+which slot changed). On Android, "nRF Connect" shows the same (connect,
+expand FFE0, enable notifications on FFE1, write to FFE2).
+
+Note the board advertises by *name* `HW充电器` in the charger state and
+`123456:` in the "Connect to WIFI" state (section 3.4.2); scan by the
+constant MAC `80:B5:4E:E6:DD:FA` so it works in either state.
 
 *Inferred:* request/answer protocol of the builder's own app; "123456" is
 the login sent inside it. **No writes have been attempted**: an unknown
 command could change setpoints or the run state of a 4 kW charger. The way
 to the commands is the app (name or APK from the seller), then either a
 look at the APK or an Android Bluetooth HCI snoop log of one session.
+
+#### 3.4.1 Command protocol (reverse-engineered over BLE, 2026-10-24)
+
+**Measured** from live writes to FFE2 / replies on FFE1 (bench, unloaded):
+
+- **Frame format — confirmed.** All traffic both ways is
+  `B5 5B | LEN(16-bit LE, total frame bytes) | CMD(1) | DATA(n) | SUM(1)`
+  with `SUM = (CMD + DATA[0..n-1]) mod 256`. Verified against the board's own
+  frames (`F1 01 F2`, `F1 00 F1`, `F1 02 F3`, `F1 FF F0`) and the default
+  reply `CC 00 00 00 00 CC`.
+- **FFE1 is read/write/notify two-way; FFE2 (write-only) is the command path.**
+  Writes to FFE1 produce no board response (only the default frame); the first
+  meaningful replies appeared once commands were sent to FFE2. FFE1 reads
+  return whatever the *app* last read (a stale mailbox, e.g. our own frames) —
+  ignore FFE1 reads as data.
+- **Board replies arrive as FFE1 notifications**, possibly split into MTU
+  chunks; reassemble on `B5 5B` + LEN.
+- **Command map so far** (reply = anything other than the default `CC` no-op):
+
+  | Cmd | Reply (hex, data part) | Reading |
+  |---|---|---|
+  | 0x01 | `0xF9` frame, 64 B = **16 LE float32** | config/status block |
+  | 0x05 | `0x05 01` | 1-byte ack OK |
+  | 0x11 | `0x00`-frame, 52 B (float32 pair + limits) **then** 0xF9 | status page A |
+  | 0x12 | same shape, two counters differ **then** 0xF9 | status page B |
+  | 0x15 | `0x15 01` | 1-byte ack OK |
+  | all others tested, 0x02–0x04, 0x06–0x10, 0x13, 0x14, 0x16–0xFF | default `CC` frame or none | unknown / needs other payload or auth |
+
+- **0xF9 config block decoded** (LE float32 slots 0–15):
+  slot 0 = **59.0** max output V | slot 1 = **42.0** min output V |
+  slot 2 = **75.0** max A (=> points to R4875G1, 75 A) | slot 4 = 1 (state bit?) |
+  slot 5 = **50.0** default V (matches board's CAN default-voltage writes) |
+  slot 6 = **15.0** default A (matches 设置电流 15.0 A on the screen) |
+  slot 7 = 35.0, slot 8 = 55.0 (limits, meaning unconfirmed) |
+  slots 9–12 = 0 | slot 13 = **48.0** online V (matches CAN online-voltage
+  writes of 47.98 V) | slot 14 = **15.0** online A | slot 15 = 0.
+- **0x11/0x12 status pages**: two slots are float32 counters that increase by
+  ~0.1 between reads seconds apart (uptime-style), plus a fixed 25.0 float
+  (limit). Exact field meanings unconfirmed.
+- **Setpoints could not be moved from BLE**: writing the expected values
+  (48.0 f, 15.0 f) over every tested command left the 0xF9 block unchanged.
+  The setters most likely need the login first.
+- **Password / login**: not yet located in the command map. Sticker says
+  `123456`. *Inferred:* the login is a frame whose data is the password,
+  and it gates the setpoint/write commands; the 0xF9/0x11/0x12 status reads
+  work unauthenticated.
+- **Device name tracks stored config + state.** It advertised `HW充电器`
+  in the charger state, then `123456:` once the "Connect to WIFI" loop
+  began. The switch appears to be a **stored name/label we set during
+  session 1** (F9 slot 4 went from `01 00 00 00` to ASCII `31 32 33 34`
+  while the board was still named `HW充电器`, right after `F1 …"12345"` /
+  `B8 …"123456"` writes) — *inferred*, not yet isolated to a single
+  command. After the final reboot it advertised the factory name `ESP32`
+  (stored name/SSID may have been reset). Useful side-channel: the name
+  tells you the board's state without the screen, but remember it can
+  reflect a value *we* wrote, not only a firmware state.
+
+#### 3.4.2 The "Connect to WIFI" state, and how to satisfy it
+
+**Measured** (2026-10-24, with help from the AP host):
+
+- The board's **WiFi MAC is `80:B5:4E:E6:DD:F8`** — exactly BLE MAC `…FA`
+  minus 2, standard for ESP32; it is the same physical radio, no second chip.
+- While it sits on the "Connect to WIFI" screen it **probes for the SSID
+  `123456J`** (captured as 802.11 Probe Requests from `…F8` on 2.4 GHz).
+  That SSID is from the board's previous configuration.
+- It will join **any** 2.4 GHz AP named `123456J` in Open mode; it does not
+  require a password and does not bring up an AP of its own. On join it
+  grabs the DHCP lease (`192.168.251.15` on our AP, hostname `espressif`).
+- After joining it did **not** open any TCP/UDP service we could see, and
+  with a proper gateway+DNS supplied by the AP it still only produced
+  DHCP/ARP on our capture before it next dropped and re-entered the
+  "Connect to WIFI" state on its own (~3 min after join). It has no
+  visible HTTP/MQTT/TCP server, no visible outbound API on our network.
+- **The "Connect to WIFI" prompt and its periodic re-entry into it are
+  independent of our BLE session.** It happens on its own schedule (every
+  few minutes when not connected to `123456J`, or a few minutes after a
+  brief join). It is the reason the board's BLE session intermittently
+  goes silent or drops: the firmware's WiFi task takes priority.
+- **Practical way to keep the board reachable over BLE for a long
+  session:** stand up a 2.4 GHz AP named `123456J` in Open mode (or
+  WPA2 with no key) on whatever host is convenient. The board will join
+  it on demand, and as long as that AP remains visible the board is
+  unlikely to be stuck in the "Connect to WIFI" state. When it *is* stuck,
+  the on-screen EXIT button is a no-op for our purposes; waiting until it
+  times out (or power-cycling and letting it re-probe) both work.
+
+**Inferred** (from `80:B5:4E:E6:DD:F8` probing for `123456J`, and the
+absence of any application traffic on our side): the builder's app
+probably speaks over BLE (which we are doing); the WiFi link is used by
+the board for something we did not trigger in the window we watched —
+either an outbound call to the previous owner's backend (which requires our
+AP to have a working gateway; we supplied one and it still produced only
+DHCP/ARP before dropping) or a soft-AP for an OTA/pairing flow we haven't
+reached. It is **not** an HTTP configuration portal on any port we probed
+(80, 81, 1234, 1883, 3000, 4180, 8000, 8060, 8080, 8081, 9600, 9999 — all
+closed on 192.168.251.15).
 
 ### 3.5 WiFi
 
@@ -175,6 +279,72 @@ known.
    jumper closed (module and adapter are the two ends); a tap channel on
    the same pair has it open (`docs/ADAPTER-USBCANFD-DUAL.md`).
 
+### 4.1 The gateway: our master, the board's display kept (decided 2026-10-25)
+
+Instead of silencing the board or reverse-engineering its Bluetooth
+protocol, its CAN pair is cut from the module and wired out; the harness sits
+in between on the two adapter channels:
+
+```
+module  <-- CAN -->  adapter ch0 (can:gs:0.0, jumper CLOSED)
+                     [ rsh huawei gateway ]
+board   <-- CAN -->  adapter ch1 (can:gs:0.1, jumper CLOSED)
+```
+
+`rsh huawei gateway --port can:gs:0.0 --front-end can:gs:0.1 --voltage V
+--current A` is then the only master the module hears (caps, per-serial
+scale and identity checks as for `set`, re-sent every 5 s). The board's
+status / info / e-label requests are forwarded and the module's replies and
+heartbeats go back, so the screen shows the module's real output voltage,
+current, power and temperatures at the board's own 0.62 s refresh; the two
+"set" fields on the screen remain the board's own wishes. The board's writes
+are answered with a synthesized ack and never forwarded; what it wanted is
+logged (`blocked=True`) and summarised (`fe_setpoints`); its 0x81 config
+broadcast is dropped without ack, as the module itself was never seen to
+ack it. Verified against the front-end simulator
+(`rsh huawei frontend-sim`, modelled on the measured board) in
+`tests/test_huawei_gateway.py`; not yet run against the real board.
+
+For the target system (Cerbo GX as master; the battery has its own VE.BMS
+bus and plays no part here), the four CAN pairs end up as:
+
+```
+module 1 pair -+
+               +-- ONE module bus -- GX VE.Can port A   (modules = addresses 1 and 2)
+module 2 pair -+
+
+board 1 pair -+
+              +-- board side: GX port B (our driver answering the boards), either
+board 2 pair -+   one channel per board, or one joined board bus (see below)
+```
+
+CAN is multi-drop: the two module pairs are joined (as in a Huawei rack;
+the seller's "can be paralleled"), the modules negotiate addresses 1 and 2,
+the GX driver addresses each. The boards must never be on that bus (each is
+a master). What answers the boards can be the GX itself: there is no master
+or slave at the CAN level, port B is a SocketCAN interface, and the driver
+is our code. Measured so far: board 1 addresses its module as 1. Board 2
+not yet measured; whether a board can be given another address, or learns
+it from the bus, is unknown (tests: unit 2 passive capture; a board on its
+own channel against `rsh huawei sim --addr 2`).
+
+- **One channel per board** (adapter on the GX, or a bench adapter):
+  per-unit screens; where a board addresses "1" but its module is 2, the
+  gateway rewrites the address field in flight (`--front-end-addr 1
+  --addr 2`, implemented and tested).
+- **One joined board bus on port B**: works if both boards carry identical
+  settings (then their identical frames never collide on arbitration) and
+  the driver answers every request with a *system view* (voltage averaged,
+  current and power summed, temperatures max) as address 1 - both screens
+  show the charger group, per-unit values stay on the GX display / VRM. A
+  per-board attribution by polling phase is possible but fragile.
+- Open firmware on the front panel (a replacement, listener-only) would
+  remove the board side entirely; a later decision.
+- A USBCANFD DUAL plugged into the Cerbo (if Venus OS carries the `gs_usb`
+  kernel driver - check `modinfo gs_usb` over SSH) adds two SocketCAN
+  channels: one per board, per-unit screens, no joined-bus trick, module
+  bus still on the built-in VE.Can port. One adapter suffices for two boards.
+
 ## 5. Open questions (asked of the seller 2026-10-24)
 
 - How does the unit leave standby; is the screen touch or display only?
@@ -189,8 +359,22 @@ known.
   bitrates, Huawei verdict with "another controller present".
 - `captures/20261024-181052-sniff-charger-with-controller.jsonl` — 15 s,
   762 frames, the board's command cycle, the module's idle status.
-- Bluetooth probe output: reproduced in section 3.4 (script in the session
-  scratchpad, read-only).
+- Raw BLE write/reply logs from the command reverse-engineering (section
+  3.4.1/3.4.2), in order of the session:
+  - `captures/ble-reverse-01.txt` / `-02.txt` — first FFE1 writes; frame
+    grammar + default `CC` reply + FFE1-is-a-mailbox finding.
+  - `captures/ble-reverse-03-ffe2.txt` — full 0x00–0xC5 command sweep over
+    FFE2; 0x01/0x05/0x11/0x12/0x15 respond, session drops at 0xC6.
+  - `captures/ble-reverse-04.txt` / `-05-state.txt` — re-confirm 0x01/0x05/0x11/0x12/0x15
+    and the 0xF9 config block in the "123456:" state.
+  - `captures/ble-reverse-06-sweep-provision.txt` — 0x00–0xFB sweep with
+    password payload in the provisioning state.
+  - `captures/ble-reverse-07-set-probe.txt` — setter diff-probe: no 0xF9
+    slot changes from any tested command with a float payload (needs login).
+- `captures/ble-reverse-progress.md` — the session log of findings as they
+  were made.
+- Probe tools: `tools/ble_inspect.py` (read-only), `tools/ble_probe*.py`
+  (write-capable, one per experiment stage).
 
 ## 7. Sources on this kind of modification
 

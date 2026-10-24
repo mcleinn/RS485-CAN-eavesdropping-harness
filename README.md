@@ -78,7 +78,10 @@ single BMS setting) is written up in `docs/CHARGE-TAPER-RESULTS.md`.
   rather than clamp, verification by measurement, keep-alive hold, and
   measurement modes for the charger's fallback behaviour (`--poll-only`,
   `--silence-after` with a listen-only tap). Broadcast to all units with
-  every acknowledgement checked.
+  every acknowledgement checked. `gateway` puts the harness between a
+  charger's add-on control board and the module: the module hears only
+  our setpoints, the board keeps its live display, its writes are acked
+  and blocked.
 - **BMS service socket** (Seplos BMS 3.0 native Modbus): read-only
   monitor of all cell voltages, balancing, FET state, alarms and settings
   in the same session as the inverter-link tap; a guarded, dry-run-first
@@ -108,7 +111,7 @@ single BMS setting) is written up in `docs/CHARGE-TAPER-RESULTS.md`.
 
 ```
 pip install -e ".[dev]"
-python -m pytest          # 186 tests, all hardware-free
+python -m pytest          # 192 tests, all hardware-free
 rsh demo                  # simulated inverter vs simulated battery over loopback
 rsh ports                 # serial ports and CAN adapters
 rsh identify --port COM5  # first thing to run against a real RS485 device

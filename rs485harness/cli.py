@@ -253,6 +253,62 @@ def cmd_huawei(args) -> int:
         sess.close(); link.close()
         return 0
 
+    if sub == "frontend-sim":
+        from .simulators.huawei_frontend_sim import HuaweiFrontEndSimulator
+        sess = S.SessionWriter(args.session or S.new_session_path(_labelled("huawei-frontend-sim", label)))
+        link = open_link(args.port, args.bitrate, name="frontend-sim")
+        fe = HuaweiFrontEndSimulator(link, sess, addr=args.addr if args.addr is not None else 1,
+                                     period_s=args.period, online_v=args.online_v,
+                                     online_i_raw=args.online_i_raw, default_v=args.default_v,
+                                     default_i_raw=args.default_i_raw, on_event=on_event)
+        print(f"huawei-frontend-sim (the add-on control board) on {args.port} @ {args.bitrate}: "
+              f"status request + 5 writes every {args.period} s; session: {sess.path}", flush=True)
+        try:
+            stats = fe.run(duration=args.duration)
+        except KeyboardInterrupt:
+            stats = fe.stats
+        _print(args, f"stats: {stats}\nlast status seen: {fe.last_status}",
+               {"stats": stats, "last_status": fe.last_status, "session": str(sess.path)})
+        sess.close(); link.close()
+        return 0
+
+    if sub == "gateway":
+        from .analyzer.huawei_gateway import HuaweiGateway
+        sess = S.SessionWriter(args.session or S.new_session_path(_labelled("huawei-gateway", label)))
+        psu_link = open_link(args.port, args.bitrate, name="module")
+        fe_link = open_link(args.front_end, args.bitrate, name="front-end")
+        addr = args.addr if args.addr is not None else hcfg.get("addr", 1)
+        gw = HuaweiGateway(psu_link, fe_link, sess, hcfg, addr=addr, voltage=args.voltage,
+                           current=args.current, resend_period=args.resend,
+                           status_period=args.status_period, on_event=on_event,
+                           fe_addr=args.front_end_addr)
+        refusals = gw.prepare()
+        report = {"sub": sub, "addr": addr, "module": args.port, "front_end": args.front_end,
+                  "voltage": args.voltage, "current": args.current, "label": label}
+        if refusals:
+            report["refusals"] = refusals
+            human = "\n".join(["gateway REFUSED:"] + [f"  {r}" for r in refusals])
+            rc = 1
+        else:
+            print(f"gateway: module on {args.port}, front-end on {args.front_end}, addr {addr}, "
+                  f"V={args.voltage} A={args.current} re-sent every {args.resend} s; front-end "
+                  f"requests forwarded, its writes blocked + acked; Ctrl+C stops", flush=True)
+            stats = gw.run(duration=args.duration)
+            report["stats"] = stats
+            lines = [f"gateway stats: {stats}"]
+            if stats.get("fe_setpoints"):
+                lines.append(f"  front-end wanted (blocked): {stats['fe_setpoints']}")
+            if stats.get("stop_reason"):
+                lines.append(f"  stopped: {stats['stop_reason']}")
+            human = "\n".join(lines)
+            rc = 0 if not stats.get("stop_reason") else 1
+        if hcfg.get("addr_map"):
+            _save_huawei(cfg, hcfg)
+        report["session"] = str(sess.path)
+        sess.close(); psu_link.close(); fe_link.close()
+        _print(args, human + f"\nsession: {sess.path}", report)
+        return rc
+
     sess = S.SessionWriter(args.session or S.new_session_path(_labelled(f"huawei-{sub}", label)))
     link = open_link(args.port, args.bitrate, name="ctl")
     addr = args.addr if args.addr is not None else hcfg.get("addr", 1)
@@ -1142,7 +1198,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(fn=cmd_identify)
 
     p = sub.add_parser("huawei", help="Huawei R48xx rectifier over CAN: status, info, "
-                                      "calibrate-current, set, hold, caps, sim")
+                                      "calibrate-current, set, hold, gateway, caps, sim, "
+                                      "frontend-sim")
     hs = p.add_subparsers(dest="sub", required=True)
 
     def hcommon(hp, bus=True):
@@ -1232,6 +1289,32 @@ def build_parser() -> argparse.ArgumentParser:
     hp.add_argument("--ac-on-after", type=float, metavar="S", help="restore AC after S s")
     hp.add_argument("--negotiate", action="store_true",
                     help="emit the power-up address negotiation (30 01 x3, 30 02 x8)")
+    hcommon(hp)
+    hp = hs.add_parser("frontend-sim", help="simulated add-on control board: status request + "
+                                            "5 writes every 0.62 s, cfg 0x13 every 3 s "
+                                            "(the gateway's test partner)")
+    hp.add_argument("--period", type=float, default=0.62)
+    hp.add_argument("--online-v", type=float, default=48.0)
+    hp.add_argument("--online-i-raw", type=int, default=70)
+    hp.add_argument("--default-v", type=float, default=50.0)
+    hp.add_argument("--default-i-raw", type=int, default=210)
+    hp.add_argument("--duration", type=float)
+    hcommon(hp)
+    hp = hs.add_parser("gateway", help="sit between the add-on control board and the module: "
+                                       "our setpoints to the module, the board's requests "
+                                       "forwarded, its writes blocked + acked")
+    hp.add_argument("--front-end", required=True, metavar="PORT",
+                    help="channel wired to the control board, e.g. can:gs:0.1")
+    hp.add_argument("--voltage", type=float, help="our on-line voltage (caps apply)")
+    hp.add_argument("--current", type=float, help="our on-line current limit (caps, scale, "
+                                                  "identity apply)")
+    hp.add_argument("--resend", type=float, default=5.0, help="re-send period s (default 5)")
+    hp.add_argument("--status-period", type=float, default=1.0,
+                    help="own status poll period when the board is quiet (default 1 s)")
+    hp.add_argument("--front-end-addr", type=int, metavar="N",
+                    help="address the board uses for its module (default: same as --addr); "
+                         "e.g. --addr 2 --front-end-addr 1 relabels identifiers both ways")
+    hp.add_argument("--duration", type=float)
     hcommon(hp)
     p.set_defaults(fn=cmd_huawei)
 
