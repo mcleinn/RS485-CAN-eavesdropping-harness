@@ -221,3 +221,16 @@ typed as markers into the tap; B7.3 = `set --broadcast --expect-acks 1,2
   ESP32-class board with builder firmware; no product page or open-source
   project with this interface found. Output off = board standby (relay or
   slot-detect), not the CAN standby register (which it sends as 0 = on).
+- Seller's listing (Ukrainian reseller, prom.ua, pasted 2026-10-24):
+  "charger 42-58.8 V, up to 70 A, up to 4000 W per block, telecom-grade
+  server rectifiers, 85-300 V AC, can be paralleled; XT90 output; control by
+  setting V/I once and switching the AC side via a dry contact + contactor
+  from the inverter's generator port". So: a 48 V-class unit (not a 71-101 V
+  rebuild; one meter reading at the terminals still confirms it), and the
+  70 A / 4000 W figures point to an **R4875G1** (75 A, 4 kW) rather than the
+  R4850G2 assumed in the Phase B documents - `info` (model, nominal current
+  for the scale policies) must settle this before any current setpoint. The
+  board is the seller's intended permanent controller; no external CAN
+  master was planned. Seller reachable via messengers: questions sent about
+  standby exit, the 123456 password (BT/WiFi/app), the exact module, a
+  display-only mode and documentation.
