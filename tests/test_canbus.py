@@ -136,6 +136,9 @@ def test_open_link_dispatches_can_specs():
 
 
 def test_open_link_gs_without_hardware_fails_cleanly():
+    from rs485harness.core.gs_usb import list_can_adapters
+    if any(a.get("kind") == "can" and a["device"].startswith("can:gs:") for a in list_can_adapters()):
+        pytest.skip("a gs_usb adapter is plugged in")
     with pytest.raises(Exception) as ei:
         open_link("can:gs:0", 500_000)
     assert "serial" not in type(ei.value).__module__
