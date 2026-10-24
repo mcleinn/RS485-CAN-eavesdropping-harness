@@ -427,6 +427,26 @@ own channel against `rsh huawei sim --addr 2`).
   boards. The strongest candidate for the target system after the plain
   gateway.
 
+### 4.3 Target design chosen (2026-10-25): modules on VE.Can, boards on a USB adapter at the Cerbo
+
+```
+module 1 + module 2 --- VE.Can bus (RJ45 pins 7/8, terminator plug in the
+                        free socket) --- Cerbo VE.Can, profile DISABLED,
+                        our service brings it up at 125 kbit/s, GX = sole master
+board 1 --- USBCANFD DUAL ch0 (jumper closed) --+
+                                                +-- Cerbo USB, dumb repeater
+board 2 --- USBCANFD DUAL ch1 (jumper closed) --+   service (4.2), address
+                                                    rewrite per board
+battery --- BMS-Can (untouched)
+```
+
+To verify, in this order: (1) `modinfo gs_usb` / `ip link` on the Cerbo
+with the adapter plugged in (fallback: Slcan firmware + `slcand`, needs
+only the USB-serial driver); (2) VE.Can at 125 kbit/s with the modules
+answering a status request; (3) the repeater against one board. The
+service must be installed through the data partition's startup hook so it
+survives Venus OS updates.
+
 ## 5. Open questions (asked of the seller 2026-10-24)
 
 - How does the unit leave standby; is the screen touch or display only?
