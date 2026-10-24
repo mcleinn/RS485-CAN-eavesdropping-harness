@@ -442,6 +442,15 @@ own channel against `rsh huawei sim --addr 2`).
   (`Display_Repeater_Task.md` in the Cerbo folder); trades the USB
   adapter and the two pairs to the Cerbo for per-board hardware and C++
   firmware. Decide by placement of the chargers relative to the Cerbo.
+  User's preference 2026-10-25: variant (a), WiFi/MQTT. Ready hardware
+  (ESP32 + CAN transceiver on one board): LILYGO T-CAN485 (~16 EUR, 5-12 V
+  in, CAN + RS485) as first choice; Seeed XIAO ESP32-C3 + CAN breakout;
+  M5Stack Atom Lite + Atomic CAN base (isolated); Waveshare ESP32-S3 2-ch
+  isolated CAN (~30 EUR, could serve both chargers). Firmware = the repeater
+  rules of `Display_Repeater_Task.md` with MQTT (Venus built-in broker,
+  Settings > Services > MQTT) as data source; heartbeats stop on stale
+  data. Power for the ESP32 is separate from the board (48 V -> 12 V
+  converter on the output, the charger's aux supply if reachable, or USB).
 
 ### 4.3 Target design chosen (2026-10-25): modules on VE.Can, boards on a USB adapter at the Cerbo
 
