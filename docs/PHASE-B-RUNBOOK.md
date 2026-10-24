@@ -137,3 +137,52 @@ typed as markers into the tap; B7.3 = `set --broadcast --expect-acks 1,2
   sources describe it (hibernate / not ready); whether a real unit sets it on
   the zero-current fallback is itself a Phase B finding, so the simulator does
   not pretend it does and the value may legitimately stay `null`.
+
+## Bench log
+
+### 2026-10-24 — B0.1, B0.2 passed; B0.3 with a surprise
+
+- B0.1 `rsh ports`: both channels, 1D50:606F. B0.2 `rsh selftest`: 16/16
+  (notes on the adapter: `docs/ADAPTER-USBCANFD-DUAL.md`).
+- B0.3 on charger 1, channel 0, listen-only: **Huawei PSU at 125 kbit/s,
+  address 1**, unsolicited `0x1001117E` every 0.377 s, `0x108111FE` every
+  0.377 s, `0x100011FE` every 3 s, no error frames at 125 k. **But the bus
+  is not quiet: the charger carries an add-on control board (display
+  front-end, exact type unconfirmed; it did not react to presses) that is a
+  CAN controller.** Every 0.62 s it sends a status request and then, within
+  10 ms, five writes: default voltage 49.98 V (raw 0xC7ED), default current
+  raw 210, online voltage 47.98 V (raw 0xBFEE, sent twice), standby = 0
+  (on), online current raw 70; every 3 s a broadcast `0x108081FE 01 13 00
+  01 00 00 00 00` (register 0x13, undocumented). All writes acked ok.
+- Unit state under that controller: AC in 226 V / 50.1 Hz, **output 0 V,
+  0 A**, limit ratio 0x76 = 70/1024 (echo of the raw online-current write),
+  temperatures 20–21 °C, 32085 operating hours, status word bytes 4-7
+  `08 00 00 04`, bytes 2-5 `00 00 08 00` (bits not in any source).
+- Free B1.4 data from 24 requests: request → first frame 2.4 / 6.1 / 8.1 ms
+  (min / median / max), burst 14 frames in 25.8 ms.
+- Consequence: `identify` reported "another controller is talking, do NOT
+  send" and the harness stayed passive. **Every active Phase B test needs
+  the front-end's CAN disconnected** (or the front-end powered off); two
+  masters re-sending different setpoints every 0.6 s would make every
+  timeout, fallback and setpoint measurement meaningless. Tap-only tests
+  (B5.1 negotiation, B1.4 timing) can run with it attached.
+- What the board's values say about it: voltages are written as V x 1023.6
+  (0xBFEE = 48.00 V, 0xC7ED = 50.00 V setting), i.e. it holds 48.0 V online
+  and 50.0 V default; currents raw 70 and 210 are 3.5 A and 10.5 A under
+  `x20` (both on a 0.5 A grid), 3.55 / 10.66 A under `ratio1024`, 2.33 /
+  7.0 A under `x30` - the board most likely encodes A x 20. The unit's
+  persistent defaults are therefore 50.0 V / raw 210 right now, rewritten
+  every 0.6 s; B3.0 cannot hold while the board is attached.
+- Board class (from the signature and from Chinese forum threads on
+  "communication-control boards" for the R4850G2/G6, which are blocked for
+  automated fetching: mydigit.cn threads 134438 and 285596, crystalradio.cn
+  thread 1620930): a small MCU + CAN-transceiver PCB wired to CAN-H/CAN-L
+  and the rectifier's aux power, with a display and knob/buttons, that
+  continuously re-sends its setpoints and also writes them as the unit's
+  defaults; variants with touch screen and Bluetooth exist (Xianyu "big
+  cannon" CNC builds). The register 0x13 broadcast every 3 s is this
+  board's; the only other sighting is a power-up candump (CP). Output 0 V
+  with online 48 V requested and standby = 0 suggests the board also gates
+  the output (relay or slot-detect), as several of these boards do.
+- Captures: `captures/20261024-181026-identify.jsonl`,
+  `captures/20261024-181052-sniff-charger-with-controller.jsonl`.

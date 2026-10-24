@@ -64,6 +64,10 @@ SET_REGS = {
     "fan_duty": (0x14, "u16@2", "%"),            # bytes 2-3 = fraction x 25600; not on R4850G2
     "standby": (0x32, "flag3", ""),
     "fan_max": (0x34, "flag3", ""),
+    # 0x108081FE 01 13 00 01 .. : broadcast on cmd 0x81; in a power-up candump
+    # (CP) and, measured 2026-10-24, every 3 s from a touchscreen front-end
+    # controller. Purpose not documented anywhere; decoded, never sent.
+    "config_13": (0x13, "flag3", ""),
 }
 SET_REG_BY_NUM = {v[0]: k for k, v in SET_REGS.items()}
 # accepted ranges found by error-ack probing (NOTES 5.1): (min, max) volts
