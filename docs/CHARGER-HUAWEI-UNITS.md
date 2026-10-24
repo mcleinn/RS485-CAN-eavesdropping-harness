@@ -345,6 +345,34 @@ own channel against `rsh huawei sim --addr 2`).
   channels: one per board, per-unit screens, no joined-bus trick, module
   bus still on the built-in VE.Can port. One adapter suffices for two boards.
 
+### 4.2 Alternatives to the gateway (noted 2026-10-25, not implemented)
+
+- **Interleaving our frames between the board's cycles.** The board's cycle
+  is regular (0.62 s, writes within 10 ms after its status request), so our
+  frames could be timed into the gap without collisions. It does not give
+  control: the module applies every write at once and keeps the last one,
+  so a setpoint of ours survives for under a second until the board's next
+  cycle overwrites it, and the board rewrites the persistent defaults every
+  cycle as well. Interleaving only holds when our values equal the
+  board's. It is useful for **reading**: status and info requests change
+  nothing, and an interleaved `info` would give serial, model and nominal
+  current without cutting a wire. Not implemented: the harness still
+  refuses any transmission while another controller is present; a
+  read-only exception timed into the gap is a possible later option.
+- **Board receive-only.** The board stays on the module bus with its CAN
+  transmit line disconnected. It can neither write nor acknowledge, so it
+  is no longer a master; our master (harness, later the GX driver) polls
+  the module, and the board sees every reply and heartbeat on the bus. Its
+  own requests go nowhere. Whether its screen keeps updating depends on
+  the firmware: it works if the board renders any status burst for "its"
+  address it sees, it fails if the board only accepts replies to its own
+  requests or shows a communication error after missing acks (its CAN
+  controller will go error-passive internally, invisible on the bus). This
+  needs the housing opened and one test with the harness as master; it
+  removes the board side of the topology entirely (one GX port, no
+  gateway, no second channel). Cheapest end state if the firmware
+  cooperates.
+
 ## 5. Open questions (asked of the seller 2026-10-24)
 
 - How does the unit leave standby; is the screen touch or display only?
