@@ -427,6 +427,22 @@ own channel against `rsh huawei sim --addr 2`).
   boards. The strongest candidate for the target system after the plain
   gateway.
 
+- **ESP32 repeater on the board's CAN pair, fed wirelessly** (user's idea,
+  2026-10-25). The board cannot be fed over its own Bluetooth (closed
+  protocol; its screen values come from its CAN side), so the ESP32 sits
+  on the board's CAN pair and plays the module; only the data source
+  moves to the air. (a) WiFi/MQTT: Venus OS's built-in MQTT mirrors the
+  driver's charger services; the ESP32 subscribes, synthesizes the status
+  burst and heartbeats for the board, acks and absorbs its writes; must
+  stop the heartbeats when its data is stale. (b) ESP-NOW tap and replay:
+  one listen-only ESP32 on the module bus forwards every frame peer-to-peer
+  to one ESP32 per board, which replays them with the address rewritten
+  and absorbs the board's writes; no Cerbo involvement, real frames, works
+  with any master. Same repeater rules as the driver task
+  (`Display_Repeater_Task.md` in the Cerbo folder); trades the USB
+  adapter and the two pairs to the Cerbo for per-board hardware and C++
+  firmware. Decide by placement of the chargers relative to the Cerbo.
+
 ### 4.3 Target design chosen (2026-10-25): modules on VE.Can, boards on a USB adapter at the Cerbo
 
 ```
