@@ -26,6 +26,13 @@ Two units were bought. Only unit 1 has been on the bench so far.
 
 ## 2. The rectifier module inside
 
+**No measured DC output of the real module exists yet** (2026-10-25). Every
+voltage figure in this document is either a setpoint of the board (48.0 V
+online, 50.0 V default, limits 42–59 V in its configuration), the measured
+AC input (226 V), or the simulator. Register 0x75 (output voltage) read
+0 in every burst captured so far, with nothing connected to the output.
+
+
 - *Inferred from the listing's 70 A / 4000 W:* an **R4875G1** (4 kW, 75 A)
   rather than the R4850G2 (3 kW, ~52 A) assumed in the Phase B documents.
   Same protocol family; the difference matters for the current-scale
