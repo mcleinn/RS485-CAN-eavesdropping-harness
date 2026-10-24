@@ -373,6 +373,33 @@ own channel against `rsh huawei sim --addr 2`).
   gateway, no second channel). Cheapest end state if the firmware
   cooperates.
 
+  *Development option - testing failure mode 1 without cutting anything:*
+  inject one synthetic status burst for address 1 (PSU->controller frames
+  only, which the module ignores by their direction bit, so nothing is
+  commanded) with marker values such as 12.3 V / 4.5 A, timed a few
+  hundred ms after the module's real burst, and watch the screen. Marker
+  values flick up = the board renders any burst for its address; never
+  shown = it only accepts replies to its own requests, and the
+  receive-only route is dead before any wire is cut. Needs a small
+  `rsh huawei` sub-command (listen for the board's cycle, delay, send one
+  logged burst). Failure mode 2 cannot be tested on the live bus: the
+  module acknowledges every board frame as long as it is connected.
+
+  *Likelihood (judgement, 2026-10-25):* mode 1 is probably fine - the
+  open-source ESP32 controllers for these modules all decode any
+  `0x1081407F` frame they receive without matching it to a request, and
+  builder firmware tends to follow the same pattern (perhaps 70 %). Mode 2
+  is the bigger risk: with its transmit line open the ESP32's CAN
+  controller reads recessive where it sent dominant, counts a bit error
+  (+8) per attempt, reaches error-passive after ~16 and **bus-off after
+  ~32 attempts, i.e. within a few seconds at the board's rate of ~7 frames
+  per cycle** - and a controller in bus-off receives nothing until the
+  firmware explicitly recovers it. Unless the builder's firmware handles
+  bus-off recovery (and does not display an error on it), the screen goes
+  dead regardless of mode 1. Overall the receive-only route is more likely
+  to fail than to work; the injection test is still worth its hour because
+  a negative result on mode 1 saves opening the housing at all.
+
 ## 5. Open questions (asked of the seller 2026-10-24)
 
 - How does the unit leave standby; is the screen touch or display only?
