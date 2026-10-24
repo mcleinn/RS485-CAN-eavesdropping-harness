@@ -140,6 +140,8 @@ typed as markers into the tap; B7.3 = `set --broadcast --expect-acks 1,2
 
 ## Bench log
 
+Consolidated technical notes on the units themselves: `docs/CHARGER-HUAWEI-UNITS.md`.
+
 ### 2026-10-24 — B0.1, B0.2 passed; B0.3 with a surprise
 
 - B0.1 `rsh ports`: both channels, 1D50:606F. B0.2 `rsh selftest`: 16/16

@@ -135,6 +135,9 @@ do not change.
   dialect quirks, cabling / pinouts)
 - `docs/CAN-PLAN.md` — CAN side: adapter and firmwares, bus parameters of
   the supported protocols, the integration design, status
+- `docs/CHARGER-HUAWEI-UNITS.md` — the Huawei-based chargers on our bench: what
+  was bought, the module as measured, the add-on ESP32 control board (its CAN
+  command cycle, screen, Bluetooth LE interface), rules and open questions
 - `docs/ADAPTER-USBCANFD-DUAL.md` — the USBCANFD DUAL board we use: firmware,
   enumeration, termination jumpers, measured transmit/ACK behaviour of its
   firmware and what the harness does about it
