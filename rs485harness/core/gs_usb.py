@@ -19,13 +19,19 @@ client speaks the legacy gs_usb protocol that the Linux kernel driver uses
     bus"; on Candlelight 2.5 (USBCANFD DUAL, measured 2026-10-24) the echo
     comes back ~0.3 ms after the write with NO bus attached, i.e. it only
     means "handed to the CAN controller". The missing ACK then arrives as an
-    error frame ~0.15 ms later - with the CAN_ERR_ACK class, or (right after
-    a channel start) with NO class bits at all and only TEC=8 in data[6] -
-    then the controller retries for ~500 ms, reports TX_TIMEOUT and goes
-    error-passive; error-state changes come as CRTL frames ~100 ms later.
-    GET_STATE (BREQ 14) is not implemented (pipe error). So "sent" = echo
-    received AND no tx-failure error frame (ACK / bus-error / protocol /
-    class-less) on that channel within ACK_GRACE_S afterwards.
+    error frame ~0.15 ms later, the controller retries for ~500 ms, reports
+    TX_TIMEOUT and goes error-passive. Every error frame carries the transmit
+    error counter TEC in data[6] (rx counter in data[7]); the firmware
+    reports ~every 100 ms while a counter is non-zero: ACK-class frames
+    (0x20/0x24/0x25) with TEC pinned at 128 during a no-ACK storm, CRTL
+    frames (0x04) with the TEC falling by 1 per successful frame while
+    recovering, and CLASS-LESS frames (id 0) that are pure counter reports
+    once error-active again (also the very first report, TEC=8). GET_STATE
+    (BREQ 14) is not implemented (pipe error). So the ACK verdict is built
+    from the counter: TEC rising (or an ACK/bus-error class frame with a
+    non-falling TEC) = our frames are failing; TEC falling = frames go
+    through again. "sent" = echo received, channel not in the failing
+    state, and no failure report within ACK_GRACE_S after the echo.
 
 Devices: 1D50:606F (candleLight, CANable, ElmuSoft Candlelight 2.5 = the
 USBCANFD DUAL's stock firmware), 1209:CA01 (CANnectivity). All channels of
@@ -74,7 +80,74 @@ FEAT_QUIRK_LPC546XX = 1 << 9
 FEAT_BT_CONST_EXT = 1 << 10
 FEAT_TERMINATION = 1 << 11
 FEAT_BERR_REPORTING = 1 << 12
-ACK_GRACE_S = 0.01     # window after the echo in which a CAN_ERR_ACK means 'not ACKed'
+ACK_GRACE_S = 0.01     # window after the echo in which a tx-failure frame means 'not ACKed'
+TX_RECOVER_S = 0.6     # a channel stays 'failing' until this long without any error frame
+                       # (the controller retries a frame for ~500 ms before TX_TIMEOUT)
+
+
+class TxFailureTracker:
+    """Per-channel 'is the bus taking our frames?' state, built only from what
+    the firmware reports (see module docstring): error frames come on state
+    changes, not per attempt, so frames queued behind a failing one would
+    look ACKed. Rule: a tx-failure error frame puts the channel into
+    'failing'; it leaves that state after recover_s without ANY error frame
+    on the channel. A transmit counts as ACKed only if the channel is not
+    failing and no tx-failure frame arrives within grace_s after the echo."""
+
+    def __init__(self, grace_s: float = ACK_GRACE_S, recover_s: float = TX_RECOVER_S):
+        self.grace_s = grace_s
+        self.recover_s = recover_s
+        self.last_failure_t: dict[int, float] = {}
+        self.last_tec: dict[int, int] = {}
+        self.failing_since: dict[int, float] = {}
+        self.events: dict[int, threading.Event] = {}
+        self.failures: dict[int, int] = {}
+        self.recoveries: dict[int, int] = {}
+
+    def event(self, ch: int) -> threading.Event:
+        return self.events.setdefault(ch, threading.Event())
+
+    def reset(self, ch: int) -> None:
+        """Channel (re)started: counters are zero again."""
+        self.last_tec[ch] = 0
+        self.failing_since.pop(ch, None)
+
+    def note_error(self, ch: int, err_id: int, data: bytes, t: float) -> None:
+        d = bytes(data)
+        tec = d[6] if len(d) >= 7 else None
+        prev = self.last_tec.get(ch, 0)
+        if tec is not None:
+            self.last_tec[ch] = tec
+            if tec < prev:                       # a frame went through: recovered
+                if ch in self.failing_since:
+                    self.recoveries[ch] = self.recoveries.get(ch, 0) + 1
+                self.failing_since.pop(ch, None)
+                return
+        rising = tec is not None and tec > prev
+        if rising or _is_tx_failure_class(err_id):
+            self.failures[ch] = self.failures.get(ch, 0) + 1
+            self.failing_since.setdefault(ch, t)
+            self.last_failure_t[ch] = t
+            self.event(ch).set()
+
+    def failing(self, ch: int, now: float) -> bool:
+        if ch not in self.failing_since:
+            return False
+        if now - self.last_failure_t.get(ch, now) > self.recover_s:
+            del self.failing_since[ch]          # no failure report for a whole retry window
+            return False
+        return True
+
+    def before_send(self, ch: int) -> None:
+        self.event(ch).clear()
+
+    def wait_verdict(self, ch: int, now_fn=time.perf_counter) -> str | None:
+        """After the echo: None = ACKed, else the reason it was not."""
+        if self.failing(ch, now_fn()):
+            return "channel is in tx-failure state (frames before this one got no ACK)"
+        if self.grace_s and self.event(ch).wait(self.grace_s):
+            return "controller reported a tx failure (no ACK)"
+        return None
 FEAT_GET_STATE = 1 << 13
 FEAT_ELM_PROTOCOL = 1 << 14       # ElmuSoft extension; we stay legacy
 FEATURE_NAMES = {FEAT_LISTEN_ONLY: "listen-only", FEAT_LOOP_BACK: "loopback",
@@ -102,13 +175,12 @@ CTRL_RETRIES = 4
 
 
 # ------------------------------------------------------------ pure helpers
-def _is_tx_failure(err_id: int) -> bool:
-    """Error-frame classes that mean our own transmission failed (see the
-    module docstring): ACK error, bus/protocol error, or the class-less
-    frame Candlelight 2.5 sends after the first failed attempt. A pure
-    controller-state frame (CAN_ERR_CRTL alone, ~100 ms late) is not one."""
+def _is_tx_failure_class(err_id: int) -> bool:
+    """Error-frame classes that by themselves mean a transmission failed:
+    ACK error, bus error, protocol error. CRTL-only state frames and
+    class-less counter reports are judged by the counter instead."""
     cls = err_id & ~CAN_ERR_FLAG & 0x1FFFFFFF
-    return cls == 0 or bool(cls & (CAN_ERR_ACK | CAN_ERR_BUSERROR | CAN_ERR_PROT))
+    return bool(cls & (CAN_ERR_ACK | CAN_ERR_BUSERROR | CAN_ERR_PROT))
 
 
 def pack_host_frame(echo_id: int, msg: CanMsg, with_ts: bool = False,
@@ -314,10 +386,7 @@ class GsUsbDevice:
         self.rx: dict[int, queue.Queue] = {ch: queue.Queue() for ch in range(self.n_channels)}
         self._echo: dict[tuple[int, int], tuple[threading.Event, list]] = {}
         self._echo_lock = threading.Lock()
-        self._ack_err: dict[int, threading.Event] = {ch: threading.Event()
-                                                     for ch in range(self.n_channels)}
-        self.ack_errors: dict[int, int] = {ch: 0 for ch in range(self.n_channels)}
-        self.ack_grace_s = ACK_GRACE_S
+        self.txfail = TxFailureTracker()
         self._reader: threading.Thread | None = None
         self._stop = threading.Event()
         self.io_errors = 0
@@ -398,6 +467,7 @@ class GsUsbDevice:
         self._ctrl_out(BREQ_MODE, channel, 0, struct.pack("<2I", MODE_START, flags))
         self.started[channel] = {"bitrate": bitrate, "listen_only": listen_only,
                                  "timing": bt}
+        self.txfail.reset(channel)
         self._ensure_reader()
         return bt
 
@@ -447,11 +517,8 @@ class GsUsbDevice:
                     if slot is not None:
                         slot[1].append(msg)
                         slot[0].set()
-                elif msg.err and _is_tx_failure(msg.can_id):
-                    self.ack_errors[msg.channel] = self.ack_errors.get(msg.channel, 0) + 1
-                    ev = self._ack_err.get(msg.channel)
-                    if ev is not None:
-                        ev.set()
+                elif msg.err:
+                    self.txfail.note_error(msg.channel, msg.can_id, msg.data, ts)
                 q = self.rx.get(msg.channel)
                 if q is not None:
                     q.put(msg)
@@ -462,7 +529,6 @@ class GsUsbDevice:
         CAN_ERR_ACK error frame followed on this channel within
         ack_grace_s (see module docstring). Raises CanTxTimeout otherwise."""
         ch = msg.channel
-        ack_err = self._ack_err[ch]
         with self._echo_lock:
             used = {k[1] for k in self._echo if k[0] == ch}
             free = [i for i in range(MAX_TX_SLOTS) if i not in used]
@@ -475,15 +541,16 @@ class GsUsbDevice:
         buf = pack_host_frame(echo_id, msg, self.hw_timestamp, self.quirk_pad)
         try:
             with self.io_lock:
-                ack_err.clear()
+                self.txfail.before_send(ch)
                 self.handle.bulkWrite(self.ep_out, buf, timeout=int(timeout * 1000) or 1)
             if not ev.wait(timeout):
                 raise CanTxTimeout(f"{self.product} ch{ch}: no echo for {msg.id_str} "
                                    f"within {timeout:.2f}s")
-            if self.ack_grace_s and ack_err.wait(self.ack_grace_s):
-                raise CanTxTimeout(f"{self.product} ch{ch}: no ACK for {msg.id_str} "
-                                   f"(controller reported CAN_ERR_ACK) - nobody on the "
-                                   f"bus / wrong bitrate / termination?")
+            why = self.txfail.wait_verdict(ch)
+            if why:
+                raise CanTxTimeout(f"{self.product} ch{ch}: no ACK for {msg.id_str} - {why}; "
+                                   f"nobody on the bus / wrong bitrate / termination / "
+                                   f"only listen-only peers?")
             return got[0]
         except self.usb1.USBError as e:
             raise CanError(f"{self.product} ch{ch}: USB write failed: {e!r}") from e

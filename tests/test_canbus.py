@@ -211,3 +211,63 @@ def test_can_session_record_shape(tmp_path):
     assert recs[0]["t_mono"] == 123.0
     assert recs[1]["id"] == "ERR" and recs[1]["err"] == "no-ack"
     json.dumps(recs)  # every field JSON-serialisable
+
+
+# ------------------------------------------------- gs_usb tx-failure model
+def test_tx_failure_tracker_follows_the_error_counter():
+    """Measured on the USBCANFD DUAL (2026-10-24): every error frame carries
+    TEC in data[6]; a failed attempt raises it by 8 (first report class-less,
+    TEC=8), a no-ACK storm pins it at 128 with ACK-class frames every 100 ms,
+    recovery shows CRTL frames with the TEC falling by 1 per frame, then
+    class-less counter reports. Only a rising counter (or an ACK/bus-error
+    class with a non-falling counter) is a failure; a falling counter is proof
+    that frames go through."""
+    from rs485harness.core.gs_usb import TxFailureTracker, _is_tx_failure_class
+    from rs485harness.core.canbus import (CAN_ERR_FLAG, CAN_ERR_ACK, CAN_ERR_CRTL,
+                                          CAN_ERR_TX_TIMEOUT, CAN_ERR_BUSERROR, CAN_ERR_LOSTARB)
+    E = CAN_ERR_FLAG
+    assert _is_tx_failure_class(E | CAN_ERR_ACK) and _is_tx_failure_class(E | CAN_ERR_BUSERROR)
+    assert not _is_tx_failure_class(E) and not _is_tx_failure_class(E | CAN_ERR_CRTL)
+    assert not _is_tx_failure_class(E | CAN_ERR_LOSTARB)
+
+    def tec(n, b1=0):
+        return bytes([0, b1, 0, 0, 0, 0, n, 0])
+    tr = TxFailureTracker(grace_s=0.02, recover_s=0.6)
+    clock = [0.0]
+    now = lambda: clock[0]
+    tr.reset(0)
+    tr.before_send(0)
+    assert tr.wait_verdict(0, now) is None                      # healthy
+    # first failed attempt: class-less report, TEC 0 -> 8
+    tr.before_send(0)
+    tr.note_error(0, E, tec(8), 1.0); clock[0] = 1.0
+    assert "no ACK" in tr.wait_verdict(0, now)
+    # storm: ACK-class frames with TEC pinned at 128 keep it failing; queued frames refused
+    for k, t in enumerate((1.1, 1.5, 1.6, 1.7)):
+        tr.note_error(0, E | CAN_ERR_CRTL | CAN_ERR_ACK | (CAN_ERR_TX_TIMEOUT if k == 1 else 0),
+                      tec(128, 0x20), t)
+        clock[0] = t + 0.05
+        tr.before_send(0)
+        assert "tx-failure state" in tr.wait_verdict(0, now)
+    # recovery: CRTL frames with falling TEC -> cleared at once, no timer needed
+    tr.note_error(0, E | CAN_ERR_CRTL, tec(127, 0x08), 2.5); clock[0] = 2.55
+    tr.before_send(0)
+    assert tr.wait_verdict(0, now) is None and tr.recoveries == {0: 1}
+    # class-less counter reports while the TEC keeps falling are NOT failures
+    for n, t in ((90, 3.0), (89, 3.1), (76, 3.2)):
+        tr.note_error(0, E, tec(n), t)
+    clock[0] = 3.25
+    tr.before_send(0)
+    assert tr.wait_verdict(0, now) is None and not tr.failing(0, now())
+    # a rising counter again is a failure, even class-less
+    tr.before_send(0)
+    tr.note_error(0, E, tec(84), 4.0); clock[0] = 4.0
+    assert tr.wait_verdict(0, now)
+    # timer fallback: no failure report for longer than the retry window
+    clock[0] = 4.61
+    assert not tr.failing(0, now())
+    # channel restart zeroes the counter baseline; channels are independent
+    tr.reset(0)
+    tr.note_error(1, E, tec(8), 5.0); clock[0] = 5.0
+    assert tr.failing(1, now()) and not tr.failing(0, now())
+    assert tr.failures == {0: 6, 1: 1}
