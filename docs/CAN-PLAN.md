@@ -66,8 +66,14 @@ socketcan on the Pi, pcan/kvaser if ever needed, and its virtual bus.
    wheels for Windows bundle libusb-1.0.dll — verify with
    `python -c "import usb1; usb1.USBContext()"`; if not, install the DLL per
    the libusb1 README).
-3. On-board termination: assume none (unverified). Keep a 120 Ω resistor in
-   the kit for the Huawei bench, where the rectifier is the only other node.
+3. On-board termination: **verified 2026-10-24** - two jumpers "CAN1 120 Ohm"
+   and "CAN2 120 Ohm", one per channel, delivered closed (= terminated).
+   Rule: closed only where the adapter channel is an END of the bus (the
+   Huawei bench with the rectifier as the only other node; both channels of a
+   gateway; both channels for the self-test). **Open** on a channel that taps
+   an existing, already terminated bus (battery-inverter link, rectifier bus
+   with the controller on channel 0), otherwise the bus sees a third 120 Ω
+   and drops to 40 Ω.
 4. Transceiver limit: ElmuSoft lists TJA1044 (5 Mbit/s); irrelevant for us
    (125–500 kbit/s classic CAN).
 

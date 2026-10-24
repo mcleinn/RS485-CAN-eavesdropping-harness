@@ -8,7 +8,10 @@ the 12-hex serial `info` prints and `<cap>` by the per-unit current cap.
 Conventions used throughout:
 
 - Channel 0 = controller (`can:gs:0` = `can:gs:0.0`), channel 1 = listen-only
-  tap (`can:gs:0.1`) on the same bus. Keep a tap running through every test:
+  tap (`can:gs:0.1`) on the same bus. Termination jumpers on the board:
+  "CAN1 120 Ohm" closed (channel 0 is one end of the rectifier bus, the
+  rectifier the other), "CAN2 120 Ohm" **open** (the tap must not add a
+  third terminator). Keep a tap running through every test:
   `rsh sniff --ch1 can:gs:0.1 --baud 125000 --quiet --label <ID>-<serial>`
   in a second terminal; it also reports `ADDR-NEG`/`ADDR-CHANGE`.
 - `--label <ID>-<serial>` on every command: the capture is then
@@ -39,7 +42,7 @@ else. A `0x21` ack on the zero-current write is the B3.0 **FAIL** (exit 1,
 | ID | Command | Pass |
 | --- | --- | --- |
 | B0.1 | `rsh ports` | both channels listed under `1D50:606F`; `0483:DF11` = stuck in DFU, stop |
-| B0.2 | `rsh selftest can:gs:0.0 can:gs:0.1` (channels cross-wired, 120 Ω both ends) | `passed: true`, "listen-only peer does not ACK" ok |
+| B0.2 | `rsh selftest can:gs:0.0 can:gs:0.1` (channel 0 to channel 1 straight: H-H, L-L; both "CANx 120 Ohm" jumpers closed) | `passed: true`, "listen-only peer does not ACK" ok |
 | B0.3 | `rsh identify --port can:gs:0 --passive-only --bitrates 125000 --label B0.3-<serial>` | `HUAWEI R48xx PSU @ 125k`, 0x1001117E about every 0.377 s, no error-frame verdicts |
 
 ## B1 — identity and telemetry, single unit
