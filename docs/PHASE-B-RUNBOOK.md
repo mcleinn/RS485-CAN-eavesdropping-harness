@@ -210,3 +210,14 @@ typed as markers into the tap; B7.3 = `set --broadcast --expect-acks 1,2
   battery is sensed or the app enables it; the touchscreen may be inactive
   while the output is off, or the controls live in the phone app (a
   Bluetooth scan with the charger powered would show what it advertises).
+- Screen of the front-end (photo 2026-10-24 18:35): colour TFT, top bar
+  "standby" (orange), device nickname pill (green), WiFi + Bluetooth icons,
+  00:00 timer; set voltage 48.0 V, set current 15.0 A; output 00.0 V /
+  00.0 A; 0 W, 0.00 Ah, inlet 23.0, output 23.0 (= registers 0x80/0x7F).
+  Set voltage matches the CAN online write; set current 15.0 A does NOT
+  match the raw 70 on the bus, so in standby the board writes a reduced
+  current. Capturing the bus once the board is in run mode gives the pair
+  (screen A, raw) that fixes its current encoding. WiFi + BT + this UI =
+  ESP32-class board with builder firmware; no product page or open-source
+  project with this interface found. Output off = board standby (relay or
+  slot-detect), not the CAN standby register (which it sends as 0 = on).
