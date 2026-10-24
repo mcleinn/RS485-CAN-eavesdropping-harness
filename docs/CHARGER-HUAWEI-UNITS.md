@@ -65,9 +65,10 @@ AC input (226 V), or the simulator. Register 0x75 (output voltage) read
 
 - **Measured:** an **ESP32-class controller** (Bluetooth address
   80:B5:4E:E6:DD:FA is in Espressif's block) with a colour TFT in the
-  black front panel, Bluetooth LE and WiFi (icons on screen). The main
-  screen did not react to touch in the user's attempts; the WiFi dialog's
-  Exit button appeared to react once. Touch status unclear (3.1.1). A personal photo is shown at power-up: the builder's own
+  black front panel, Bluetooth LE and WiFi (icons on screen). The screen
+  is a touchscreen, but the firmware reacts to touch only in its dialogs
+  (confirmed on the WiFi dialog's Exit button); the main screen has no
+  reacting targets (3.1.1). A personal photo is shown at power-up: the builder's own
   firmware image.
 - *Inferred:* a hand-built conversion of the kind sold by individual
   builders on Xianyu ("Huawei big cannon adjustable power supply": rewound
@@ -91,13 +92,12 @@ AC input (226 V), or the simulator. Register 0x75 (output voltage) read
   green (twisted, CAN pair to the module's rear connector) and red +
   black (supply from the fan-end auxiliary rail, voltage not yet measured,
   likely the fan's 12 V).
-- Display: TFT on a single flex into a ZIF socket, no separate touch
-  flex visible. **Touch status unclear:** the main screen never reacted to
-  presses, but the "Exit" button of the "Connect to WIFI" dialog appeared
-  to react once (that dialog also clears by itself after a timeout). A
-  resistive layer can share the single flex and the C3 can read it; check
-  for a milky flexible top sheet over the glass, and whether Exit reacts
-  repeatably.
+- Display: TFT **with touch** on a single flex into a ZIF socket (the
+  touch lines share the flex; a resistive layer read by the C3 is the
+  likely construction). Confirmed 2026-10-25: the "Exit" button of the
+  "Connect to WIFI" dialog reacted repeatedly. The main screen has no
+  touch targets that react, so the firmware uses touch only in its
+  dialogs - which is also why nothing on the main screen leaves standby.
 - Consequences: the board has **no slot-detect line and no relay drive**,
   so it cannot switch the module's output except over CAN - of the three
   candidates for the 0 V output only the CAN ones remain (standby polarity
