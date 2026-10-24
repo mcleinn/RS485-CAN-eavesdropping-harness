@@ -234,3 +234,16 @@ typed as markers into the tap; B7.3 = `set --broadcast --expect-acks 1,2
   master was planned. Seller reachable via messengers: questions sent about
   standby exit, the 123456 password (BT/WiFi/app), the exact module, a
   display-only mode and documentation.
+- Bluetooth (read-only probe from the notebook with bleak, 2026-10-24): the
+  board is a BLE peripheral, name "HW" + Chinese "charger", address
+  80:B5:4E:E6:DD:FA, manufacturer data "HW"+"CHARGE", one vendor service
+  FFE0 with FFE1 (notify/read/write) and FFE2 (write) = the HM-10/JDY-style
+  serial bridge; no bonding, no PIN (hence the system pairing dialogs do
+  nothing; "123456" is an in-protocol password). Nothing is streamed
+  unsolicited; FFE1 reads back a constant frame `B5 5B 07 00 F1 01 F2` =
+  header, 16-bit total length 7, cmd 0xF1, data 0x01, 8-bit sum checksum.
+  Request/answer protocol, builder-specific; no writes attempted (a wrong
+  command could change setpoints). Way forward: the builder's app, named by
+  the seller, then either its APK or an Android HCI snoop log of one session
+  gives the commands (login with 123456, run/standby, set V/I, status).
+  No WiFi network visible: the ESP32 is in station mode, not an AP.
