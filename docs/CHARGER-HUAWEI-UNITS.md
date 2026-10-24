@@ -440,10 +440,16 @@ board 2 --- USBCANFD DUAL ch1 (jumper closed) --+   service (4.2), address
 battery --- BMS-Can (untouched)
 ```
 
-To verify, in this order: (1) `modinfo gs_usb` / `ip link` on the Cerbo
-with the adapter plugged in (fallback: Slcan firmware + `slcand`, needs
-only the USB-serial driver); (2) VE.Can at 125 kbit/s with the modules
-answering a status request; (3) the repeater against one board. The
+Verified on the Cerbo 2026-10-25 (read-only, over SSH): Venus OS v2.92,
+kernel 5.10.109-venus-8, `CONFIG_CAN_GS_USB=m` with `gs_usb.ko` present in
+`/lib/modules/<kernel>/kernel/drivers/net/can/usb/` (also `slcan.ko`,
+loaded, and `cdc_acm` as a module - the Slcan fallback exists too);
+`can0` (VE.Can, on-chip `sun4i_can`) present, DOWN and **already configured for 125 kbit/s** (sample point 0.875), `can1` (BMS-Can, via `slcand` on ttyS3) UP at 500 kbit/s with Victron's `can-bus-bms` service on it; the `gs_usb` module's alias list includes the candleLight ids; `candump`,
+`cansend` and Python 3 with `PF_CAN` available. **The USB adapter route
+is open.** Still to verify: (1) the adapter actually enumerating as
+`can2`/`can3` when plugged in (kernel driver loads on demand); (2) VE.Can
+at 125 kbit/s with the modules answering a status request; (3) the
+repeater against one board. The
 service must be installed through the data partition's startup hook so it
 survives Venus OS updates.
 
