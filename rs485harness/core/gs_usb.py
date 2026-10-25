@@ -83,6 +83,7 @@ FEAT_BERR_REPORTING = 1 << 12
 ACK_GRACE_S = 0.01     # window after the echo in which a tx-failure frame means 'not ACKed'
 TX_RECOVER_S = 0.6     # a channel stays 'failing' until this long without any error frame
                        # (the controller retries a frame for ~500 ms before TX_TIMEOUT)
+START_SETTLE_S = 0.05  # after MODE start, before the caller may transmit
 FIRST_GRACE_S = 0.15   # grace after the echo while the counter baseline is still unknown
                        # (a dead bus shows its ACK-class frame ~100 ms after the echo)
 
@@ -186,11 +187,14 @@ CTRL_RETRIES = 4
 
 # ------------------------------------------------------------ pure helpers
 def _is_tx_failure_class(err_id: int) -> bool:
-    """Error-frame classes that by themselves mean a transmission failed:
-    ACK error, bus error, protocol error. CRTL-only state frames and
-    class-less counter reports are judged by the counter instead."""
+    """The one error-frame class that by itself means OUR transmission failed:
+    ACK error. Protocol and bus-error frames also come from receive errors
+    (e.g. joining a bus in the middle of a frame right after a channel start)
+    and were judged as transmit failures by mistake; they, CRTL-only state
+    frames and class-less counter reports are judged by the counter direction
+    instead (a failed attempt raises TEC by 8)."""
     cls = err_id & ~CAN_ERR_FLAG & 0x1FFFFFFF
-    return bool(cls & (CAN_ERR_ACK | CAN_ERR_BUSERROR | CAN_ERR_PROT))
+    return bool(cls & CAN_ERR_ACK)
 
 
 def pack_host_frame(echo_id: int, msg: CanMsg, with_ts: bool = False,
@@ -474,11 +478,16 @@ class GsUsbDevice:
             flags |= FEAT_HW_TIMESTAMP
         if self.feature & FEAT_BERR_REPORTING:
             flags |= FEAT_BERR_REPORTING
-        self._ctrl_out(BREQ_MODE, channel, 0, struct.pack("<2I", MODE_START, flags))
+        # reader first: the firmware queues frames toward USB from the moment the
+        # channel starts, and the first reply burst (14 frames in 14 ms at 125 k)
+        # overflowed that queue when the host began reading late - measured as
+        # truncated first bursts (10, then 3 of 14 frames) on the R4875G5.
         self.started[channel] = {"bitrate": bitrate, "listen_only": listen_only,
                                  "timing": bt}
         self.txfail.reset(channel)
         self._ensure_reader()
+        self._ctrl_out(BREQ_MODE, channel, 0, struct.pack("<2I", MODE_START, flags))
+        time.sleep(START_SETTLE_S)
         return bt
 
     def stop_channel(self, channel: int) -> None:

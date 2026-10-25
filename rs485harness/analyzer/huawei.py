@@ -754,7 +754,8 @@ class HuaweiClient:
                                                 "unsolicited": 0, "status_frames": 0})
             if dec["kind"] == "unsolicited":
                 pa["unsolicited"] += 1
-                unsol_t.setdefault(a, []).append(now)
+                if msg.can_id == HuaweiId(0x20, a, 0x11, False).pack():   # the 0x1001117E-style one only
+                    unsol_t.setdefault(a, []).append(now)
                 pa["last_load_raw"] = dec.get("load_raw")
                 if dec.get("output_disabled") and pa["t_first_output_disabled"] is None:
                     pa["t_first_output_disabled"] = t_rel

@@ -226,7 +226,8 @@ def test_tx_failure_tracker_follows_the_error_counter():
     from rs485harness.core.canbus import (CAN_ERR_FLAG, CAN_ERR_ACK, CAN_ERR_CRTL,
                                           CAN_ERR_TX_TIMEOUT, CAN_ERR_BUSERROR, CAN_ERR_LOSTARB)
     E = CAN_ERR_FLAG
-    assert _is_tx_failure_class(E | CAN_ERR_ACK) and _is_tx_failure_class(E | CAN_ERR_BUSERROR)
+    assert _is_tx_failure_class(E | CAN_ERR_ACK)
+    assert not _is_tx_failure_class(E | CAN_ERR_BUSERROR)        # can be a receive error
     assert not _is_tx_failure_class(E) and not _is_tx_failure_class(E | CAN_ERR_CRTL)
     assert not _is_tx_failure_class(E | CAN_ERR_LOSTARB)
 

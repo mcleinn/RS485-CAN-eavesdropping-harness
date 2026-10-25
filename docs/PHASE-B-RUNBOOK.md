@@ -212,9 +212,41 @@ the board's last defaults (50.0 V, raw 210) are to be replaced.
   records per substitution). **User confirms the screen shows 50 V and 0 A
   in the output fields** - the first time this board ever displayed the
   module's real voltage; its "set" fields stay its own 48.0 V / 15.0 A.
+- **Voltage control across the range, watched on the meter (user confirmed
+  48 and 52):** 25 s holds at 48.0 V -> 48.018 V and 52.0 V -> 51.913 V;
+  steps 46.0 -> 46.036, 42.0 -> 41.942, 41.0 -> 40.952 (accepted: the
+  module goes down to the documented 41 V floor); Pylontech range 52.4 ->
+  52.331 V, 52.8 -> 52.705 V; every value reached within 2 s, all read via
+  0x85. Downward steps with no load take a few seconds on the meter
+  (output capacitors discharge through the bleeder only).
+- Still intermittent after the baseline fix: the first transmission of a
+  fresh process is sometimes judged "no ACK" (44 V step, two returns to
+  50 V). Reproduction with error frames logged: captures/first-tx-diag.jsonl.
+- **B3.0 done on unit 1: `set --current 0 --persist --apply` acked** (reg
+  0x04 = raw 0). Fallback check: hold 50 V / 10 A for 20 s, then 90 s of
+  silence (no error frames, heartbeats every 0.377 s throughout); the next
+  status reads show **0x76 = 0** where it showed the board's stored 210
+  before anything commanded the unit - i.e. after the silence the module
+  runs on the new zero default. 0x85 = 49.93 V = the stored default voltage.
+  No load, so the zero current itself is not a meter reading yet.
+- Two more adapter-side fixes: (1) the USB reader now starts before the
+  channel and the caller waits 50 ms after MODE start - the first reply
+  burst of a fresh process had been truncated (10, then 3 of 14 frames) by
+  an overflow of the firmware's queue; three fresh reads now give 14/14;
+  (2) only ACK-class error frames and a rising TEC count as transmit
+  failures; protocol/bus-error frames can be receive errors (joining the
+  bus mid-frame right after a start) and had produced the remaining false
+  "no ACK" verdicts (stored reason: "controller reported a tx failure").
+- **B3.4 answered: status polling alone keeps the module online.** After a
+  12 s hold (online limit raw 148 -> 0x76 shows raw 127 = ratio 0.124), 100 s
+  of `hold --poll-only` left the limit unchanged, no fallback. A driver that
+  wants the zero-current fallback must stop all traffic or write zero
+  itself; ceasing the setpoint writes while polling is not enough. 0x76
+  reads the stored default exactly while offline (210, then 0) but 127 for
+  an online raw of 148: relation open until the load test.
 - Open: who controls the fan under load (board PWM vs module); standby
   semantics and heartbeat byte 3 on this model; the 11-bit identifier
-  quirk; meaning of 0x76 = 127; the state change at +26 s.
+  quirk; meaning of 0x76 = 127 while the board was in control (0x76 does follow the stored default: 210 before, 0 after B3.0); the state change at +26 s.
 
 Consolidated technical notes on the units themselves: `docs/CHARGER-HUAWEI-UNITS.md`.
 
