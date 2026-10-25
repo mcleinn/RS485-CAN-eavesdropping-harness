@@ -26,11 +26,25 @@ Two units were bought. Only unit 1 has been on the bench so far.
 
 ## 2. The rectifier module inside
 
-**No measured DC output of the real module exists yet** (2026-10-25). Every
-voltage figure in this document is either a setpoint of the board (48.0 V
-online, 50.0 V default, limits 42–59 V in its configuration), the measured
-AC input (226 V), or the simulator. Register 0x75 (output voltage) read
-0 in every burst captured so far, with nothing connected to the output.
+### 2.0 Identified and first commanded, 2026-10-25 (board's CAN pair cut, harness as sole master)
+
+| | **measured** |
+|---|---|
+| Model | **R4875G5** (e-label: "4000W High Efficiency Rectifier, White panel-Wireless Dedicated"), Item 02312NFE |
+| Serial / barcode | 708A85B00972 / 2102312NFELUMC002418, manufactured 2021-12-13 |
+| Versions | hw 256, DC-DC sw 1546, PFC sw 1546; slot id 0x0609; 32,085 operating hours |
+| Nominal current | **69.0 A** from info 0x0001 (register 0x88 bytes 2-3 = 6900, the same in hundredths) |
+| Status burst | 14 registers (0x0E, 0x70-0x76, 0x78, 0x7F-0x83); the first burst after a channel start can come back short |
+| **Output voltage register** | **0x85**, not 0x75. 0x75 reads 0 in every burst; a GET of 0x85 returns the terminal voltage (49.954 V against 49.96 V on the meter). The harness falls back to 0x85 when 0x75 is 0 (`out_voltage_source` in `status`). |
+| Other GET-able registers | 0x7C PFC bus 407 V, 0x7E PFC temperature, 0x77 power-available ratio, 0x86/0x87/0x88/0x9B (meaning open) |
+| Heartbeat byte 3 | was 1 ("output disabled" per the community tables) while the output measured 49.9 V - on this model the byte means something else; the harness's offline tracker must not trust it alone |
+| Module-originated frames | `0x108081FE 01 13 00 01 ..` every 3 s and `0x100011FE 00 02 ..` every 3 s come from the **module**, not from the board (seen on the module-only channel) |
+| First control | `set --voltage 51.0 --apply` -> ack ok, 0x85 = 50.966 V (verify OK); `set --standby 0 --apply` acked (no visible change: the output was on). Current setpoints: conservative scale bound for this serial, 20 A cap; the first attempt was refused by a false "no ACK" on the identity request (adapter start-up issue, see runbook log) |
+| Stored defaults as left by the board | 49.98 V (0xC7ED), current raw 210 - the terminals carry 49.96 V with nothing connected |
+
+Voltage figures elsewhere in this document are board setpoints (48.0 V
+online, 50.0 V default, limits 42-59 V), the AC input (226-243 V), or the
+simulator.
 
 
 - *Inferred from the listing's 70 A / 4000 W:* an **R4875G1** (4 kW, 75 A)

@@ -22,7 +22,7 @@ import time
 from ..core.canbus import CanLink, CanMsg, CanTxTimeout, CanError, log_can
 from ..protocols.huawei_r48xx import regs as R
 from ..protocols.huawei_r48xx.ids import (HuaweiId, PROTO_CTL, CMD_DATA, CMD_SET, CMD_CFG,
-                                          request_id)
+                                          CMD_INFO, request_id)
 
 BOARD_VOLT_SCALE = 1023.6          # measured: 48.0 V -> raw 0xBFEE
 
@@ -32,7 +32,8 @@ class HuaweiFrontEndSimulator:
                  cfg_period_s: float = 3.0, ack_timeout_s: float = 0.3,
                  default_v: float = 50.0, default_i_raw: int = 210,
                  online_v: float = 48.0, online_i_raw: int = 70, standby: int = 0,
-                 chan: str = "fe", on_event=None, clock=time.monotonic, tick_s: float = 0.005):
+                 chan: str = "fe", on_event=None, clock=time.monotonic, tick_s: float = 0.005,
+                 disguised_standby: bool = False):
         self.link = link
         self.session = session
         self.addr = addr
@@ -45,6 +46,7 @@ class HuaweiFrontEndSimulator:
         self.tick_s = tick_s
         self.default_v, self.default_i_raw = default_v, default_i_raw
         self.online_v, self.online_i_raw, self.standby = online_v, online_i_raw, standby
+        self.disguised_standby = disguised_standby     # measured: standby payload under the 0x50 id, once
         self.stats = {"cycles": 0, "requests": 0, "bursts_complete": 0, "writes": 0,
                       "acks_ok": 0, "acks_error": 0, "acks_missing": 0, "cfg_frames": 0,
                       "tx_timeout": 0, "status_frames": 0, "unsolicited": 0}
@@ -160,6 +162,9 @@ class HuaweiFrontEndSimulator:
         t0 = self.clock()
         self._next_cycle = t0
         self._next_cfg = t0 + 0.1
+        if self.disguised_standby:
+            self._tx(request_id(CMD_INFO, self.addr), bytes([0x01, 0x32, 0, self.standby, 0, 0, 0, 0]),
+                     "front-end standby payload under the INFO id (measured quirk)")
         while not self.stop_event.is_set():
             now = self.clock()
             if duration and now - t0 >= duration:

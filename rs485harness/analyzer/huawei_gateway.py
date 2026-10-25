@@ -21,8 +21,27 @@ Rules:
   ack (the module was never seen to ack them either).
 - The module's acks are consumed on the module side, never forwarded (they
   answer our writes, not the board's).
+- **A request is an all-zero payload.** Measured 2026-10-25: the board sent
+  its standby command (`01 32 00 01 ..`) once under the INFO command id
+  0x50; classifying by command id alone let it through to the module. Now
+  a board frame is forwarded only if its command is a request command AND
+  its payload is all zeros (status / info / e-label requests are); a GET
+  (0x82) is forwarded only with the `01 rr 00 ..` shape. Anything else from
+  the board is blocked and logged with `blocked=True` and a reason; no ack
+  is synthesized for it unless it is a plain 0x80 write.
+- Frames the module side originates with the "to PSU" bit set (the module's
+  own `0x108081FE 01 13 ..` announcement every 3 s) are forwarded to the
+  board like its other frames: on a healthy gateway the module side has no
+  other transmitter than the modules.
 - Nothing is derived from stale data: our setpoints are what the operator
   gave, the board's wishes are information only (no "mirror" mode in v1).
+- Display voltage (`display_voltage_0x85`): on the R4875G5 the burst's 0x75
+  reads 0 and the terminal voltage sits in 0x85 (measured 2026-10-25), so the
+  board's screen shows 0 V. With this option the gateway GETs 0x85 after
+  every complete burst and puts that value into the 0x75 frame it relays to
+  the board - only if the reading is younger than DISPLAY_V_MAX_AGE_S,
+  otherwise the original zero goes through. Two records per substitution
+  (original marked, modified sent), like the policy engine.
 - Address rewrite (`fe_addr`): a board built for a single module addresses
   it as 1; when the module is address 2 on a shared module bus, the gateway
   rewrites the address field of every identifier in flight - board frames
@@ -41,8 +60,20 @@ from ..protocols.huawei_r48xx.ids import HuaweiId, CMD_DATA, CMD_SET, CMD_CFG, r
 from .huawei import HuaweiClient
 
 FORWARD_FROM_PSU = ("status", "info", "elabel", "get_reply", "unsolicited", "addr_negotiation")
-FORWARD_REQUESTS = ("status_request", "info_request", "elabel_request", "get")
+FORWARD_REQUESTS = ("status_request", "info_request", "elabel_request")
 ACK_TIMEOUT_S = 0.5
+ZERO8 = bytes(8)
+DISPLAY_V_MAX_AGE_S = 2.0
+
+
+def request_payload_ok(kind: str, data: bytes) -> bool:
+    """True only for the payload shapes a genuine request has."""
+    d = bytes(data).ljust(8, b"\0")[:8]
+    if kind in FORWARD_REQUESTS:
+        return d == ZERO8
+    if kind == "get":
+        return d[0] == 0x01 and d[2:] == bytes(6)
+    return False
 
 
 class HuaweiGateway:
@@ -51,7 +82,7 @@ class HuaweiGateway:
                  current: float | None = None, resend_period: float = 5.0,
                  status_period: float = 1.0, chan_psu: str = "psu", chan_fe: str = "fe",
                  on_event=None, clock=time.monotonic, sleep=time.sleep,
-                 fe_addr: int | None = None):
+                 fe_addr: int | None = None, display_voltage_0x85: bool = False):
         for name, link in (("module", psu_link), ("front-end", fe_link)):
             if getattr(link, "listen_only", False):
                 raise CanError(f"gateway: the {name} link is listen-only - a gateway must ACK "
@@ -60,6 +91,8 @@ class HuaweiGateway:
         self.session = session
         self.addr = addr
         self.fe_addr = addr if fe_addr is None else fe_addr      # what the board calls the module
+        self.display_voltage_0x85 = display_voltage_0x85
+        self._v85: tuple[int, float] | None = None               # (raw, t) of the last 0x85 reading
         self.voltage, self.current = voltage, current
         self.resend_period, self.status_period = resend_period, status_period
         self.chan_psu, self.chan_fe = chan_psu, chan_fe
@@ -76,7 +109,8 @@ class HuaweiGateway:
                       "psu_dropped": 0, "fe_requests_forwarded": 0, "fe_writes_blocked": 0,
                       "fe_cfg_blocked": 0, "fe_dropped": 0, "acks_synthesized": 0,
                       "fe_undelivered": 0, "psu_undelivered": 0, "changes": 0,
-                      "first_offline_s": None, "addr_rewritten": 0}
+                      "first_offline_s": None, "addr_rewritten": 0,
+                      "display_voltage_substituted": 0, "get85_sent": 0}
         self._burst = R.StatusBurst()
         self._last: dict = {}
         self._tracker = self.client._online_tracker()
@@ -172,6 +206,16 @@ class HuaweiGateway:
     def _on_psu_frame(self, msg: CanMsg) -> None:
         dec = R.decode(msg, self.client.nominal_a)
         flow = dec["flow"] if dec else None
+        if dec and dec["kind"] == "set" and HuaweiId.unpack(msg.can_id).cmd == CMD_CFG:
+            # the module's own 0x81 announcement (addr 0, "to PSU" bit set): relay it
+            log_can(self.session, self.chan_psu, "rx", msg, decoded=dec, flow=flow, mode="gateway",
+                    note="module-originated config frame")
+            fwd = CanMsg(msg.ts, msg.can_id, bytes(msg.data), msg.ext, msg.rtr)
+            if self._send(self.fe, self.chan_fe, fwd, flow, forwarded=True):
+                self.stats["psu_forwarded"] += 1
+            else:
+                self.stats["fe_undelivered"] += 1
+            return
         if dec and dec["kind"] == "ack":
             log_can(self.session, self.chan_psu, "rx", msg, decoded=dec, flow=flow, mode="gateway",
                     note="ack of our write (consumed, not forwarded)")
@@ -184,10 +228,25 @@ class HuaweiGateway:
                     self.stats["our_acks_error"] += 1
                     self.on_event(f"!! module REJECTED our {name} write (0x21)")
             return
+        if dec and dec["kind"] == "get_reply" and dec.get("reg") == "0x%02X" % R.OUT_VOLTAGE_ALT_REG:
+            log_can(self.session, self.chan_psu, "rx", msg, decoded=dec, flow=flow, mode="gateway",
+                    note="0x85 reading for the display (consumed)")
+            self._v85 = (dec.get("raw", 0), self.clock())
+            return
         if dec and dec["kind"] in FORWARD_FROM_PSU:
-            log_can(self.session, self.chan_psu, "rx", msg, decoded=dec, flow=flow, mode="gateway")
             fwd = self._rewrite(msg, self.addr, self.fe_addr)
-            if self._send(self.fe, self.chan_fe, fwd, flow, forwarded=True):
+            substituted = None
+            if (self.display_voltage_0x85 and dec["kind"] == "status" and dec.get("reg") == "0x75"
+                    and dec.get("raw") == 0 and self._v85 is not None
+                    and self.clock() - self._v85[1] <= DISPLAY_V_MAX_AGE_S):
+                raw85 = int(self._v85[0])
+                fwd.data = bytes(msg.data)[:4] + raw85.to_bytes(4, "big")
+                substituted = {"out_voltage_v": round(raw85 / 1024, 3), "from": "0x85",
+                               "age_s": round(self.clock() - self._v85[1], 3)}
+                self.stats["display_voltage_substituted"] += 1
+            log_can(self.session, self.chan_psu, "rx", msg, decoded=dec, flow=flow, mode="gateway",
+                    note="ORIGINAL 0x75 = 0, replaced by 0x85 toward the board" if substituted else None)
+            if self._send(self.fe, self.chan_fe, fwd, flow, forwarded=True, modified=substituted):
                 self.stats["psu_forwarded"] += 1
             else:
                 self.stats["fe_undelivered"] += 1
@@ -195,6 +254,11 @@ class HuaweiGateway:
                 if self._burst.feed(msg) and self._burst.complete:
                     self._snapshot(self._burst.snapshot(self.client.nominal_a, self.client.scale))
                     self._burst = R.StatusBurst()
+                    if self.display_voltage_0x85:
+                        if self._send(self.psu, self.chan_psu,
+                                      R.get_frame(R.OUT_VOLTAGE_ALT_REG, self.addr), "CTL->PSU",
+                                      note="gateway GET 0x85 for the display", policy="gateway"):
+                            self.stats["get85_sent"] += 1
             return
         log_can(self.session, self.chan_psu, "rx", msg, decoded=dec, flow=flow, mode="gateway",
                 note="dropped")
@@ -210,7 +274,19 @@ class HuaweiGateway:
             return
         kind = dec["kind"]
         hid = HuaweiId.unpack(msg.can_id)
-        if kind in FORWARD_REQUESTS:
+        if kind in FORWARD_REQUESTS or kind == "get":
+            if not request_payload_ok(kind, msg.data):
+                # a command hidden under a request id (measured: standby under 0x50)
+                self.stats["fe_writes_blocked"] += 1
+                self.stats["fe_disguised_blocked"] = self.stats.get("fe_disguised_blocked", 0) + 1
+                self.fe_setpoints[f"{kind}:{bytes(msg.data).hex()}"] = {
+                    "raw": None, "t": round(self.clock() - self._t0, 3), "disguised": True}
+                log_can(self.session, self.chan_fe, "rx", msg, decoded=dec, flow=flow,
+                        mode="gateway", blocked=True,
+                        note=f"BLOCKED non-zero payload under {kind} id (not a request)")
+                self.on_event(f"!! front-end sent {bytes(msg.data).hex(' ')} under the "
+                              f"{kind} id - blocked, not forwarded")
+                return
             log_can(self.session, self.chan_fe, "rx", msg, decoded=dec, flow=flow, mode="gateway")
             self._last_fe_request = self.clock()
             fwd = self._rewrite(msg, self.fe_addr, self.addr)

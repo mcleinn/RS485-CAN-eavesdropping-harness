@@ -153,6 +153,62 @@ the board's last defaults (50.0 V, raw 210) are to be replaced.
 
 ## Bench log
 
+### 2026-10-25 — board cut from the module, first master contact, gateway live
+
+- Wiring: board's CAN pair (yellow/green) off the module and onto adapter
+  channel 1; module on channel 0; both jumpers closed. Fan went to full
+  speed the moment the board lost CAN data, output 49.96 V on the meter
+  (the stored default), AC 241 V.
+- `info` on channel 0: **R4875G5**, serial 708A85B00972, nominal 69 A (not
+  the assumed R4850G2 / 52 A). Bound in `.rsh-config.json`.
+- `status`: 0x75 = 0 while the meter shows 49.96 V -> GET probe of
+  0x60-0x9F found the voltage in **0x85** (49.954 V); harness now falls
+  back to it. First `status` after a channel start returned a short burst
+  (10 of 14 frames) and one request got a false "no ACK": adapter
+  start-up issue, under investigation (captures/start-diag.jsonl).
+- Board alone on channel 1 with a listen-only tap: retransmission storm
+  (2791 identical frames in 3 s) and the adapter reports those unacked
+  frames with the identifier cut to 11 bits (0x0FE); in normal (ACKing)
+  mode the same frames are proper 29-bit frames. Board cycle without its
+  module: default V/I, standby = 1, online current 0, status + info
+  requests; no online-voltage write any more.
+- **Gateway, relay-only, 45 s on the real pair**: 81 board requests
+  forwarded, 1375 module frames to the board, 309 board writes blocked and
+  acked, nothing undelivered. **Display came alive, fan went off** (the
+  board drives the fan PWM from the temperatures it reads). **Defect found
+  and fixed**: the board sent its standby payload `01 32 00 01` once under
+  the INFO command id 0x50; the gateway classified by command id and
+  forwarded it. Rule now: a request is an all-zero payload, anything else
+  is blocked (`fe_disguised_blocked`); test added. The module's output was
+  not affected (0x85 stayed at 49.9 V).
+- ~26 s into that gateway run the module changed state by itself:
+  heartbeat byte 3 -> 1 with bytes 4-5 = FE D5, 0x76 raw 210 -> 127,
+  status word 0x08000004 -> 0x08800014, output unchanged at 49.9 V.
+  Meaning unknown; byte 3 is not "output disabled" on this model.
+- `set --standby 0 --apply` acked. **`set --voltage 51.0 --apply`: acked,
+  0x85 = 50.966 V, verify OK - first commanded output on the real unit.**
+  Return to 50.0 V reported an error (adapter "no ACK" at channel start);
+  current cap: `caps --serial 708A85B00972 --current-scale conservative
+  --nominal-a 69 --current-max 20`, `set --current 10` dry run = raw 148
+  (9.97 / 7.4 / 4.93 A under the three readings); apply refused by the same
+  false "no ACK" on the identity request. To be repeated after the adapter
+  start-up issue is understood.
+- Adapter start-up issue found and fixed: the controller's transmit error
+  counter is not zero after a channel restart and the firmware's first
+  counter report may only follow our first transmission; the tracker
+  assumed a zero baseline and judged "9" a rise. It now learns the
+  baseline from the first report (`captures/start-diag.jsonl`).
+- After the fix: **`set --voltage 50.0 --apply` acked, 0x85 = 49.977 V,
+  verify OK; `set --current 10 --apply` with the conservative scale (raw
+  148) acked.** Register 0x76 stayed at raw 127 before and after the write,
+  so on this model 0x76 is not a readback of the online limit (on the
+  R4850G2 it echoes the raw); the current limit is verified with a load
+  only. Earlier the 0x76 value changed 210 -> 127 at the unexplained state
+  change ~26 s into the first gateway run.
+- Open: who controls the fan under load (board PWM vs module); standby
+  semantics and heartbeat byte 3 on this model; the 11-bit identifier
+  quirk; meaning of 0x76 = 127; the state change at +26 s.
+
 Consolidated technical notes on the units themselves: `docs/CHARGER-HUAWEI-UNITS.md`.
 
 ### 2026-10-24 — B0.1, B0.2 passed; B0.3 with a surprise

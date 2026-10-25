@@ -219,3 +219,85 @@ def test_gateway_rewrites_the_address_for_a_board_built_for_address_1(tmp_path):
     assert all(r["decoded"]["addr"] in (0, 1) for r in recs if r["chan"] == "fe" and r.get("decoded"))
     assert all(r["decoded"]["addr"] in (0, 2) for r in recs if r["chan"] == "psu" and r.get("decoded"))
 
+
+def test_gateway_blocks_commands_disguised_as_requests(tmp_path):
+    """Measured 2026-10-25 on the real board: it sent its standby command
+    under the INFO command id. Classifying by command id alone forwarded it
+    and the module went to standby. A request is an all-zero payload."""
+    from rs485harness.analyzer.huawei_gateway import request_payload_ok
+    assert request_payload_ok("info_request", bytes(8))
+    assert not request_payload_ok("info_request", bytes.fromhex("0132000100000000"))
+    assert request_payload_ok("get", bytes.fromhex("0175000000000000"))
+    assert not request_payload_ok("get", bytes.fromhex("0132000100000000"))
+    clk = FakeClock()
+    tag = int(time.time() * 1000)
+    bus_psu = C.VirtualCanBus(f"gwd-psu-{tag}")
+    bus_fe = C.VirtualCanBus(f"gwd-fe-{tag}")
+    sess = SessionWriter(tmp_path / "s.jsonl")
+    psu = HuaweiPsuSimulator(bus_psu.end("psu", I.BITRATE), sess, load_ohm=10.0, timeout_s=5.0,
+                             unsol_period_s=0.377, clock=clk, tick_s=0.005)
+    fe = HuaweiFrontEndSimulator(bus_fe.end("board", I.BITRATE), sess, period_s=0.62, standby=1,
+                                 clock=clk, tick_s=0.005, disguised_standby=True)
+    cap = SessionWriter(tmp_path / "gw.jsonl")
+    events = []
+    gw = HuaweiGateway(bus_psu.end("gw-psu", I.BITRATE), bus_fe.end("gw-fe", I.BITRATE), cap,
+                       bound_cfg(), voltage=52.0, resend_period=2.0, on_event=events.append,
+                       clock=clk, sleep=clk.sleep)
+    psu.start()
+    try:
+        assert gw.prepare() == []
+        fe.start()                               # the gateway's bus end exists: its first frame is seen
+        run_gateway(gw, 3.0)
+    finally:
+        fe.stop(); psu.stop(); sess.close(); cap.close()
+    assert not psu.standby                                   # the disguised command never arrived
+    assert gw.stats["fe_disguised_blocked"] == 1
+    assert any("under the info_request id" in e for e in events)
+    recs = [r for r in read_session(tmp_path / "gw.jsonl") if r.get("kind") == "can"]
+    sent_to_psu = [r for r in recs if r["chan"] == "psu" and r["dir"] == "tx"]
+    assert all(r["hex"] == "00" * 8 or r["decoded"]["kind"] == "set" and r.get("policy") == "gateway"
+               for r in sent_to_psu), [r["hex"] for r in sent_to_psu]
+    blocked = [r for r in recs if r.get("blocked") and "non-zero payload" in (r.get("note") or "")]
+    assert len(blocked) == 1 and blocked[0]["hex"] == "0132000100000000"
+    # the module's own 0x81 announcement is relayed to the board
+    psu_rx = [r for r in read_session(tmp_path / "s.jsonl") if r.get("chan") == "psu"]
+    assert psu.online_v == 52.0
+
+
+def test_gateway_display_voltage_from_0x85(tmp_path):
+    """R4875G5: 0x75 = 0 in the burst, the voltage is in 0x85. With the option
+    the board's screen gets the fresh 0x85 value in the 0x75 frame, logged as a
+    modification; without it the zero goes through."""
+    for enabled in (True, False):
+        clk = FakeClock()
+        tag = int(time.time() * 1000)
+        bus_psu = C.VirtualCanBus(f"gwv-psu-{tag}-{enabled}")
+        bus_fe = C.VirtualCanBus(f"gwv-fe-{tag}-{enabled}")
+        sess = SessionWriter(tmp_path / f"s{enabled}.jsonl")
+        psu = HuaweiPsuSimulator(bus_psu.end("psu", I.BITRATE), sess, load_ohm=10.0, timeout_s=5.0,
+                                 unsol_period_s=0.377, clock=clk, tick_s=0.005, voltage_in_0x85=True)
+        fe = HuaweiFrontEndSimulator(bus_fe.end("board", I.BITRATE), sess, period_s=0.62,
+                                     clock=clk, tick_s=0.005)
+        cap = SessionWriter(tmp_path / f"gw{enabled}.jsonl")
+        gw = HuaweiGateway(bus_psu.end("gw-psu", I.BITRATE), bus_fe.end("gw-fe", I.BITRATE), cap,
+                           bound_cfg(), voltage=52.0, resend_period=2.0, clock=clk, sleep=clk.sleep,
+                           display_voltage_0x85=enabled)
+        psu.start()
+        try:
+            assert gw.prepare() == []
+            fe.start()
+            run_gateway(gw, 4.0)
+        finally:
+            fe.stop(); psu.stop(); sess.close(); cap.close()
+        if enabled:
+            assert fe.last_status["out_voltage_v"] == 52.0, fe.last_status
+            assert gw.stats["display_voltage_substituted"] >= 3 and gw.stats["get85_sent"] >= 3
+            recs = [r for r in read_session(tmp_path / "gwTrue.jsonl") if r.get("kind") == "can"]
+            mod = [r for r in recs if r.get("modified")]
+            orig = [r for r in recs if (r.get("note") or "").startswith("ORIGINAL 0x75")]
+            assert mod and len(mod) == len(orig) and mod[0]["modified"]["from"] == "0x85"
+            assert mod[0]["decoded"]["value"] == 52.0 and orig[0]["decoded"]["value"] == 0.0
+        else:
+            assert fe.last_status["out_voltage_v"] == 0.0
+            assert gw.stats["display_voltage_substituted"] == 0
+

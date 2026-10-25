@@ -238,9 +238,20 @@ def test_tx_failure_tracker_follows_the_error_counter():
     tr.reset(0)
     tr.before_send(0)
     assert tr.wait_verdict(0, now) is None                      # healthy
-    # first failed attempt: class-less report, TEC 0 -> 8
+    # after a restart the baseline is unknown: the first class-less report only
+    # sets it (measured: TEC 9 left over from the previous session while the
+    # module was answering); an ACK-class frame is a failure regardless
     tr.before_send(0)
-    tr.note_error(0, E, tec(8), 1.0); clock[0] = 1.0
+    tr.note_error(0, E, tec(9), 0.5)
+    assert tr.wait_verdict(0, now) is None and tr.last_tec[0] == 9 and tr.failures == {}
+    tr.before_send(0)
+    tr.note_error(0, E, tec(8), 0.6)                            # falling: fine
+    assert tr.wait_verdict(0, now) is None
+    # a dead bus: class-less TEC report then the ACK-class frame -> failure
+    tr.reset(0)
+    tr.before_send(0)
+    tr.note_error(0, E, tec(8), 0.9)                            # baseline only
+    tr.note_error(0, E | CAN_ERR_ACK, tec(8), 1.0); clock[0] = 1.0
     assert "no ACK" in tr.wait_verdict(0, now)
     # storm: ACK-class frames with TEC pinned at 128 keep it failing; queued frames refused
     for k, t in enumerate((1.1, 1.5, 1.6, 1.7)):
@@ -266,8 +277,8 @@ def test_tx_failure_tracker_follows_the_error_counter():
     # timer fallback: no failure report for longer than the retry window
     clock[0] = 4.61
     assert not tr.failing(0, now())
-    # channel restart zeroes the counter baseline; channels are independent
+    # channel restart forgets the baseline; channels are independent
     tr.reset(0)
-    tr.note_error(1, E, tec(8), 5.0); clock[0] = 5.0
+    tr.note_error(1, E | CAN_ERR_ACK, tec(8), 5.0); clock[0] = 5.0
     assert tr.failing(1, now()) and not tr.failing(0, now())
     assert tr.failures == {0: 6, 1: 1}

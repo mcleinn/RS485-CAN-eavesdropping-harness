@@ -71,7 +71,7 @@ class HuaweiPsuSimulator:
                  reject_zero_default_current: bool = False,
                  on_ac_loss: str = "reset",
                  negotiate_on_start: bool = False,
-                 tick_s: float = 0.05):
+                 tick_s: float = 0.05, voltage_in_0x85: bool = False):
         if on_ac_loss not in AC_LOSS_MODES:
             raise ValueError(f"on_ac_loss must be one of {AC_LOSS_MODES}")
         if len(serial_hex) != 12:
@@ -93,6 +93,7 @@ class HuaweiPsuSimulator:
         self.reject_zero_default_current = reject_zero_default_current
         self.on_ac_loss = on_ac_loss
         self.tick_s = tick_s
+        self.voltage_in_0x85 = voltage_in_0x85    # R4875G5 quirk: 0x75 reads 0, 0x85 has the voltage
         sc = R.CURRENT_SCALES[scale]
         self.default_v = default_v
         self.default_i_raw = sc.encode(default_current_a if default_current_a is not None
@@ -254,6 +255,9 @@ class HuaweiPsuSimulator:
             0x7F: 35.0 + p_out / 150, 0x80: 28.0, 0x81: i, 0x82: i,
         }
         out = []
+        if self.voltage_in_0x85:
+            vals[0x85] = vals[0x75]
+            vals[0x75] = 0.0
         for reg in STATUS_ORDER:
             raw = int(round(vals[reg] * (1 if reg == 0x0E else 1024)))
             out.append((reply_id(CMD_DATA, self.addr, True),
@@ -363,9 +367,15 @@ class HuaweiPsuSimulator:
             self._handle_set(msg.data)
         elif hid.cmd == CMD_GET:
             reg = bytes(msg.data)[1] if len(msg.data) > 1 else 0
+            answered = False
             for cid, data in self._status_frames():
                 if data[1] == reg:
                     self._tx(reply_id(CMD_GET, self.addr, False), data)
+                    answered = True
+            if not answered and reg == 0x85 and self.voltage_in_0x85:
+                v, _ = self.measure()
+                self._tx(reply_id(CMD_GET, self.addr, False),
+                         bytes([0x01, 0x85, 0, 0]) + int(round(v * 1024)).to_bytes(4, "big"))
 
     def _tick(self) -> None:
         now = self.clock()

@@ -186,7 +186,9 @@ class HuaweiClient:
 
     # ----------------------------------------------------------- read-only
     def status(self, timeout: float = 1.0, addr: int | None = None) -> dict:
-        """One 0x40 request, decoded burst of this PSU."""
+        """One 0x40 request, decoded burst of this PSU. When the burst's
+        0x75 reads 0 (R4875G5: dead register) a GET of 0x85 supplies the
+        output voltage; `out_voltage_source` says which register it is."""
         addr = self.addr if addr is None else addr
         req = R.request_frame(CMD_DATA, addr)
         if not self._send(req, note="status request"):
@@ -197,7 +199,26 @@ class HuaweiClient:
         burst = R.StatusBurst()
         for m in msgs:
             burst.feed(m)
-        return burst.snapshot(self.nominal_a, self.scale)
+        snap = burst.snapshot(self.nominal_a, self.scale)
+        snap["out_voltage_source"] = "0x75"
+        if snap.get("complete") and not snap.get("out_voltage_v"):
+            alt = self.get_register(R.OUT_VOLTAGE_ALT_REG, addr=addr)
+            if alt is not None and alt.get("value") is not None:
+                snap["out_voltage_0x75"] = snap.get("out_voltage_v")
+                snap["out_voltage_v"] = alt["value"]
+                snap["out_voltage_source"] = "0x85"
+        return snap
+
+    def get_register(self, reg: int, timeout: float = 0.5, addr: int | None = None) -> dict | None:
+        """One 0x82 GET of a status register (read-only); decoded reply or None."""
+        addr = self.addr if addr is None else addr
+        if not self._send(R.get_frame(reg, addr), note=f"get 0x{reg:02X}"):
+            return None
+        msgs = self._collect(timeout, lambda d: d["kind"] == "get_reply" and d["addr"] == addr
+                             and d.get("reg") == f"0x{reg:02X}", lambda d: True)
+        if not msgs:
+            return None
+        return R.decode_status_data(msgs[0].data)
 
     def read_serial(self, timeout: float = 1.0, addr: int | None = None) -> dict:
         """One 0x50 request, only the identity: serial and nominal current
@@ -329,9 +350,14 @@ class HuaweiClient:
         return refusals
 
     def plan_set(self, voltage: float | None, current: float | None,
-                 persist: bool = False) -> list[dict]:
+                 persist: bool = False, standby: int | None = None) -> list[dict]:
         """The frames a set would send (dry run output)."""
         plan = []
+        if standby is not None:
+            msg, raw = R.set_frame("standby", 1 if standby else 0, self.target_addr)
+            plan.append({"name": "standby", "value": 1 if standby else 0, "unit": "", "raw": raw,
+                         "id": msg.id_str, "hex": msg.data.hex(" ").upper(), "msg": msg,
+                         "target": self.target_label(), "in_range": True})
         if voltage is not None:
             name = "default_voltage" if persist else "online_voltage"
             msg, raw = R.set_frame(name, voltage, self.target_addr)
@@ -346,7 +372,11 @@ class HuaweiClient:
                          "id": msg.id_str, "hex": msg.data.hex(" ").upper(), "msg": msg,
                          "target": self.target_label(),
                          "scale": self.scale, "nominal_a": self.nominal_a,
-                         "in_range": raw <= 1250 if self.scale == "ratio1024" else True})
+                         "in_range": raw <= 1250 if self.scale in ("ratio1024", "conservative") else True})
+            if self.scale == "conservative":
+                plan[-1]["worst_case_a"] = round(R.CURRENT_SCALES["conservative"].decode(raw, self.nominal_a), 2)
+                plan[-1]["readings_a"] = {n: round(R.CURRENT_SCALES[n].decode(raw, self.nominal_a), 2)
+                                          for n in ("ratio1024", "x20", "x30")}
         return plan
 
     def send_set(self, item: dict, ack_timeout: float = 0.5) -> dict:
@@ -403,15 +433,19 @@ class HuaweiClient:
         return res
 
     def set_points(self, voltage: float | None, current: float | None, apply: bool = False,
-                   persist: bool = False, verify: bool = True) -> dict:
+                   persist: bool = False, verify: bool = True, standby: int | None = None) -> dict:
         report: dict = {"addr": self.addr, "target": self.target_label(),
                         "expect_acks": self.expect_acks if self.broadcast else None,
-                        "apply": apply, "persist": persist,
+                        "apply": apply, "persist": persist, "standby": standby,
                         "refusals": self.check_caps(voltage, current), "plan": []}
         if report["refusals"]:
             report["result"] = "refused"
             return report
-        plan = self.plan_set(voltage, current, persist)
+        if persist and standby is not None:
+            report["refusals"] = ["standby is an on-line command (reg 0x32); it has no persistent form"]
+            report["result"] = "refused"
+            return report
+        plan = self.plan_set(voltage, current, persist, standby)
         report["plan"] = [{k: v for k, v in p.items() if k != "msg"} for p in plan]
         bad = [p for p in plan if not p["in_range"]]
         if bad:
@@ -483,7 +517,7 @@ class HuaweiClient:
             sc = R.CURRENT_SCALES[name]
             raw = sc.encode(test_a, self.nominal_a)
             # what each OTHER policy would make of this raw value: never exceed the cap
-            worst = max(R.CURRENT_SCALES[o].decode(raw, self.nominal_a) for o in R.CURRENT_SCALES)
+            worst = max(R.CURRENT_SCALES[o].decode(raw, self.nominal_a) for o in R.READINGS)
             cand = {"scale": name, "raw": raw, "worst_case_a": round(worst, 2)}
             if cap and worst > cap:
                 cand["skipped"] = f"worst-case {worst:.1f} A exceeds cap {cap} A"
@@ -518,8 +552,8 @@ class HuaweiClient:
             # disagree. Say which policies this unit cannot tell apart.
             raw0 = R.CURRENT_SCALES[report["result"]].encode(test_a, self.nominal_a)
             report["equivalent"] = sorted(
-                n for n, sc in R.CURRENT_SCALES.items()
-                if abs(sc.encode(test_a, self.nominal_a) - raw0) <= max(2, raw0 * 0.05))
+                n for n in R.READINGS
+                if abs(R.CURRENT_SCALES[n].encode(test_a, self.nominal_a) - raw0) <= max(2, raw0 * 0.05))
             if len(report["equivalent"]) > 1:
                 report["note"] = (f"for a {self.nominal_a} A unit the scales "
                                   f"{report['equivalent']} agree within 5 %; "

@@ -281,7 +281,8 @@ def cmd_huawei(args) -> int:
         gw = HuaweiGateway(psu_link, fe_link, sess, hcfg, addr=addr, voltage=args.voltage,
                            current=args.current, resend_period=args.resend,
                            status_period=args.status_period, on_event=on_event,
-                           fe_addr=args.front_end_addr)
+                           fe_addr=args.front_end_addr,
+                           display_voltage_0x85=args.display_voltage_0x85)
         refusals = gw.prepare()
         report = {"sub": sub, "addr": addr, "module": args.port, "front_end": args.front_end,
                   "voltage": args.voltage, "current": args.current, "label": label}
@@ -366,11 +367,12 @@ def cmd_huawei(args) -> int:
             human = "\n".join(lines)
             rc = 0 if info.get("nominal_current_a") else 1
         elif sub == "set":
-            if args.voltage is None and args.current is None:
-                print("nothing to set: give --voltage and/or --current", file=sys.stderr)
+            if args.voltage is None and args.current is None and args.standby is None:
+                print("nothing to set: give --voltage, --current and/or --standby", file=sys.stderr)
                 return 2
             rep = cl.set_points(args.voltage, args.current, apply=args.apply,
-                                persist=args.persist, verify=not args.no_verify)
+                                persist=args.persist, verify=not args.no_verify,
+                                standby=args.standby)
             report.update(rep)
             lines = [f"result: {rep['result']} target {rep['target']}"
                      + (f" expecting acks from {rep['expect_acks']}" if rep.get("expect_acks") else "")
@@ -381,6 +383,10 @@ def cmd_huawei(args) -> int:
                 lines.append(f"  frame {p['id']}  {p['hex']}   = {p['name']} "
                              f"{p['value']} {p['unit']} (raw {p['raw']}"
                              + (f", scale {p['scale']}" if p.get("scale") else "") + ")")
+                if p.get("readings_a"):
+                    lines.append(f"    conservative: the unit will limit to {p['readings_a']} A "
+                                 f"depending on which reading it obeys; worst case "
+                                 f"{p['worst_case_a']} A <= intended {p['value']} A")
             for s in rep.get("sent", []):
                 lines.append(f"  sent {s['id']} {s['hex']} -> {s['target']}: acked={s['acked']} "
                              f"ok={s.get('ok')} acks={s.get('acks')}"
@@ -1232,6 +1238,8 @@ def build_parser() -> argparse.ArgumentParser:
     hp.add_argument("--apply", action="store_true", help="really send")
     hp.add_argument("--no-verify", action="store_true",
                     help="skip the measurement check after --apply")
+    hp.add_argument("--standby", type=int, choices=[0, 1],
+                    help="reg 0x32: 1 = standby (output off), 0 = on; on-line only")
     htarget(hp)
     hcommon(hp)
     hp = hs.add_parser("calibrate-current", help="find which current scale this unit "
@@ -1261,7 +1269,7 @@ def build_parser() -> argparse.ArgumentParser:
                                     ".rsh-config.json (no bus access)")
     hp.add_argument("--voltage-max", type=float)
     hp.add_argument("--current-max", type=float)
-    hp.add_argument("--current-scale", help="ratio1024 | x20 | x30 | none (per serial)")
+    hp.add_argument("--current-scale", help="ratio1024 | x20 | x30 | conservative | none (per serial)")
     hp.add_argument("--nominal-a", type=float, help="per serial")
     hp.add_argument("--serial", help="12-hex serial the scale/nominal belong to (from "
                                      "`info`); default: the serial bound to --addr")
@@ -1311,6 +1319,9 @@ def build_parser() -> argparse.ArgumentParser:
     hp.add_argument("--resend", type=float, default=5.0, help="re-send period s (default 5)")
     hp.add_argument("--status-period", type=float, default=1.0,
                     help="own status poll period when the board is quiet (default 1 s)")
+    hp.add_argument("--display-voltage-0x85", action="store_true",
+                    help="relay the fresh 0x85 reading in the 0x75 frame to the board (R4875G5: "
+                         "0x75 reads 0, the screen would show 0 V); logged as a modification")
     hp.add_argument("--front-end-addr", type=int, metavar="N",
                     help="address the board uses for its module (default: same as --addr); "
                          "e.g. --addr 2 --front-end-addr 1 relabels identifiers both ways")

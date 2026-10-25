@@ -41,8 +41,16 @@ STATUS_REGS = {
     0x81: ("out_current_a", "A", SCALE_1024),          # fast / unfiltered
     0x82: ("out_current_filtered_a", "A", SCALE_1024),
     0x83: ("status_bits", "", 1),
+    # Measured 2026-10-25 on an R4875G5 (serial 708A85B00972): its 14-frame burst
+    # carries 0x75 = 0 while the terminals show 49.96 V; a GET of 0x85 returns
+    # 51153 = 49.954 V. So on that model the output voltage lives in 0x85 and
+    # 0x75 is dead. Not in any community source. 0x88 bytes 2-3 = 6900 = the
+    # 69.00 A rating in hundredths (matches info 0x0001), 0x7C = PFC bus 407 V.
+    0x85: ("out_voltage_alt_v", "V", SCALE_1024),
     0x87: ("fan_status", "", 1),
+    0x88: ("rated_current_raw", "", 1),
 }
+OUT_VOLTAGE_ALT_REG = 0x85
 STATUS_BITS = {        # of the 32-bit value in bytes 4-7 (sources name few bits)
     1 << 9: "standby-via-pin",          # BL comment (Peter): 0x00000200
     1 << 20: "fan-error?",              # ES page 10: 00 00 10 00 seen, poster's guess
@@ -93,6 +101,12 @@ class CurrentScale:
             return int(round(amps * 20))
         if self.name == "x30":
             return int(round(amps * 30))
+        if self.name == "conservative":
+            # the SMALLEST raw any reading would produce: whichever reading the
+            # unit really obeys, the resulting limit is <= the intended amps
+            if not nominal_a:
+                raise ValueError("conservative scale needs the nominal current (info reg 0x0001)")
+            return min(CURRENT_SCALES[n].encode(amps, nominal_a) for n in ("ratio1024", "x20", "x30"))
         raise ValueError(self.name)
 
     def decode(self, raw: int, nominal_a: float | None) -> float:
@@ -100,14 +114,27 @@ class CurrentScale:
             if not nominal_a:
                 raise ValueError("ratio1024 scale needs the nominal current")
             return raw / 1024 * nominal_a
+        if self.name == "conservative":
+            # the LARGEST amps any reading would make of this raw (worst case)
+            if not nominal_a:
+                raise ValueError("conservative scale needs the nominal current")
+            return max(CURRENT_SCALES[n].decode(raw, nominal_a) for n in ("ratio1024", "x20", "x30"))
         return raw / (20 if self.name == "x20" else 30)
 
+
+READINGS = ("ratio1024", "x20", "x30")     # the community readings; "conservative" is a policy
 
 CURRENT_SCALES = {
     "ratio1024": CurrentScale("ratio1024", True,
                               "patagonaa (R4830S1/R4850G2/R4850G6), esphome, Huawei R100030G1 guide"),
     "x20": CurrentScale("x20", False, "haklein, ele-dev, mjpalmowski R4850G2.YAML, beyondlogic comment"),
     "x30": CurrentScale("x30", False, "BotoX, craigpeacock Protocol.xlsx"),
+    # not a reading of the unit but a policy for the time before calibrate-current
+    # has been run with a load: send the smallest raw of all readings, so the real
+    # limit is at or below the intended value whichever reading the unit obeys;
+    # decode reports the worst case (largest amps). Calibration replaces it.
+    "conservative": CurrentScale("conservative", True,
+                                 "harness policy: min raw of ratio1024/x20/x30; real limit <= intended"),
 }
 
 

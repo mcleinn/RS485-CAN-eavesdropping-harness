@@ -755,3 +755,63 @@ def test_config_migration_of_flat_scale():
     assert "current_scale" not in hc and hc["units"] == {} and hc["addr_map"] == {}
     assert "_migrated" not in huawei_config({"huawei": {k: v for k, v in hc.items()
                                                         if not k.startswith("_")}})
+
+
+def test_status_falls_back_to_register_0x85_when_0x75_is_dead(tmp_path):
+    """R4875G5 (measured 2026-10-25): the burst's 0x75 is 0 while the output is
+    at 49.96 V, which a GET of 0x85 returns. status() and therefore
+    verify-by-measurement must use it."""
+    clk = FakeClock()
+    bus, sess, sim = fake_bench(tmp_path, clk, load_ohm=10.0, voltage_in_0x85=True)
+    try:
+        cl = HuaweiClient(bus.end("ctl", I.BITRATE), sess, "can", 1, bound_cfg(), clock=clk, sleep=clk.sleep)
+        snap = cl.status()
+        assert snap["complete"] and snap["out_voltage_source"] == "0x85"
+        assert snap["out_voltage_v"] == 53.5 and snap["out_voltage_0x75"] == 0.0
+        rep = cl.set_points(52.5, None, apply=True)
+        assert rep["result"] == "applied" and rep["verify"]["verified"] and rep["verify"]["measured_v"] == 52.5
+        tx = [r for r in read_session(sess.path) if r.get("dir") == "tx" and r["chan"] == "can"]
+        assert any(r["decoded"]["kind"] == "get" and r["decoded"].get("reg") == "0x85" for r in tx)
+    finally:
+        sim.stop(); sess.close()
+
+
+def test_conservative_scale_never_exceeds_intended_current():
+    """Before calibration: the smallest raw of all readings, so the real limit
+    is <= intended whichever reading the unit obeys; decode = worst case."""
+    sc = R.CURRENT_SCALES["conservative"]
+    for nominal in (35.0, 52.0, 69.0, 75.0):
+        for amps in (2.0, 5.0, 10.0, 20.0):
+            raw = sc.encode(amps, nominal)
+            for n in ("ratio1024", "x20", "x30"):
+                assert R.CURRENT_SCALES[n].decode(raw, nominal) <= amps + 0.05, (nominal, amps, n)
+            assert sc.decode(raw, nominal) <= amps + 0.05
+    assert sc.encode(10.0, 69.0) == 148                   # ratio1024 is the smallest on a 69 A unit
+    assert sc.encode(10.0, 35.0) == 200                   # x20 is the smallest on a 35 A unit
+    with pytest.raises(ValueError):
+        sc.encode(5.0, None)
+
+
+def test_set_standby_and_conservative_current(tmp_path):
+    clk = FakeClock()
+    bus, sess, sim = fake_bench(tmp_path, clk, nominal_a=69.0, load_ohm=2.0)
+    try:
+        hc = bound_cfg(scale="conservative", nominal=69.0, current_max=20.0)
+        cl = HuaweiClient(bus.end("ctl", I.BITRATE), sess, "can", 1, hc, clock=clk, sleep=clk.sleep)
+        # standby on: dry run shows the documented frame, apply switches the sim off
+        rep = cl.set_points(None, None, standby=1)
+        assert rep["result"] == "dry-run" and rep["plan"][0]["hex"] == "01 32 00 01 00 00 00 00"
+        assert cl.set_points(None, None, standby=1, apply=True)["result"] == "applied" and sim.standby
+        assert cl.set_points(None, None, standby=0, apply=True)["result"] == "applied" and not sim.standby
+        assert cl.set_points(None, None, standby=1, persist=True, apply=True)["result"] == "refused"
+        # conservative current: raw 148 for 10 A on 69 A; the sim (ratio1024) limits to 9.97 A
+        rep = cl.set_points(None, 10.0, apply=True)
+        assert rep["result"] == "applied" and rep["plan"][0]["raw"] == 148
+        assert rep["plan"][0]["worst_case_a"] == pytest.approx(10.0, abs=0.05)
+        assert rep["plan"][0]["readings_a"]["x30"] == pytest.approx(4.93, abs=0.01)
+        clk.sleep(0.1)
+        assert cl.status()["out_current_a"] == pytest.approx(9.97, abs=0.05)
+        assert cl.set_points(None, 21.0, apply=True)["result"] == "refused"      # cap still enforced
+    finally:
+        sim.stop(); sess.close()
+

@@ -124,6 +124,23 @@ drowns in copies. To exercise channel 0 against channel 1, run something
 that acknowledges on channel 1 (`rsh inverter-sim --can-profile ...`,
 `rsh huawei sim`, or the self-test), not `rsh sniff`.
 
+### 5.1 Two more measured facts (2026-10-25, real bus)
+
+- **The transmit error counter survives a channel restart**, and the
+  firmware's first counter report may arrive only after the first
+  transmission of the new session. A tracker that assumes a zero baseline
+  then reads the leftover value as a rise and declares the first frame
+  unacknowledged while the peer is answering. The harness now learns the
+  baseline from the first report (and allows 150 ms instead of 10 ms for a
+  dead bus to show its ACK-class frame on that first frame).
+- **Unacknowledged frames of a lone transmitter are reported with the
+  identifier cut to 11 bits** (the low 11 bits, EFF flag missing): a
+  control board alone on a channel with the adapter listen-only showed
+  `0x0FE 01 01 .. C7 ED` 2791 times in 3 s instead of `0x108180FE`. With
+  the channel in normal mode (acknowledging) the same frames arrive as
+  proper 29-bit frames. Treat 11-bit ids on a bus that should carry 29-bit
+  traffic as the signature of "nobody acknowledges", not as data.
+
 ## 6. Jumper setting per job
 
 | Job | CAN1 jumper (channel 0) | CAN2 jumper (channel 1) |

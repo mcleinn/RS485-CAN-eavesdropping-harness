@@ -83,6 +83,8 @@ FEAT_BERR_REPORTING = 1 << 12
 ACK_GRACE_S = 0.01     # window after the echo in which a tx-failure frame means 'not ACKed'
 TX_RECOVER_S = 0.6     # a channel stays 'failing' until this long without any error frame
                        # (the controller retries a frame for ~500 ms before TX_TIMEOUT)
+FIRST_GRACE_S = 0.15   # grace after the echo while the counter baseline is still unknown
+                       # (a dead bus shows its ACK-class frame ~100 ms after the echo)
 
 
 class TxFailureTracker:
@@ -108,22 +110,29 @@ class TxFailureTracker:
         return self.events.setdefault(ch, threading.Event())
 
     def reset(self, ch: int) -> None:
-        """Channel (re)started: counters are zero again."""
-        self.last_tec[ch] = 0
+        """Channel (re)started. Measured 2026-10-25: the controller's TEC is NOT
+        zero after a restart (it keeps the previous session's value) and the
+        firmware's first counter report may only come after our first
+        transmission - so the baseline is unknown until the first report."""
+        self.last_tec[ch] = None
         self.failing_since.pop(ch, None)
 
     def note_error(self, ch: int, err_id: int, data: bytes, t: float) -> None:
         d = bytes(data)
         tec = d[6] if len(d) >= 7 else None
-        prev = self.last_tec.get(ch, 0)
-        if tec is not None:
+        prev = self.last_tec.get(ch)
+        if tec is not None and prev is None:
+            self.last_tec[ch] = tec              # first report = baseline, judged by class only
+            if not _is_tx_failure_class(err_id):
+                return
+        elif tec is not None:
             self.last_tec[ch] = tec
             if tec < prev:                       # a frame went through: recovered
                 if ch in self.failing_since:
                     self.recoveries[ch] = self.recoveries.get(ch, 0) + 1
                 self.failing_since.pop(ch, None)
                 return
-        rising = tec is not None and tec > prev
+        rising = tec is not None and prev is not None and tec > prev
         if rising or _is_tx_failure_class(err_id):
             self.failures[ch] = self.failures.get(ch, 0) + 1
             self.failing_since.setdefault(ch, t)
@@ -145,7 +154,8 @@ class TxFailureTracker:
         """After the echo: None = ACKed, else the reason it was not."""
         if self.failing(ch, now_fn()):
             return "channel is in tx-failure state (frames before this one got no ACK)"
-        if self.grace_s and self.event(ch).wait(self.grace_s):
+        grace = self.grace_s if self.last_tec.get(ch) is not None else FIRST_GRACE_S
+        if grace and self.event(ch).wait(grace):
             return "controller reported a tx failure (no ACK)"
         return None
 FEAT_GET_STATE = 1 << 13
