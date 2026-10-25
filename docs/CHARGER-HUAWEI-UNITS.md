@@ -88,10 +88,17 @@ AC input (226 V), or the simulator. Register 0x75 (output voltage) read
   it an 8-pin SOIC = the CAN transceiver; a small 8-pin device U6 (EEPROM
   or similar); a 1 uH inductor with a switching regulator = the board
   steps its supply down itself. Four unpopulated programming pads.
-- **One 4-pin connector is the board's entire connection**: yellow +
-  green (twisted, CAN pair to the module's rear connector) and red +
-  black (supply from the fan-end auxiliary rail, voltage not yet measured,
-  likely the fan's 12 V).
+- **One 5-pin connector is the board's entire connection** (corrected
+  2026-10-25 from the enlarged photos): yellow + green = twisted CAN pair
+  to the module's rear edge connector; red + black + a second yellow run
+  to the module's 3-pin fan connector (supply, ground, and the fan's
+  tacho/PWM line - the seller's "fan speed follows load" is this wire).
+  Supply voltage not yet measured, presumably the fan's 12 V. No wire goes
+  anywhere else: no slot-detect / output-enable line. CAN-H/CAN-L
+  assignment of yellow/green not resolvable from the photos: continuity to
+  the transceiver's pins 6 (CAN-L) / 7 (CAN-H) after locating its pin-1
+  mark, or follow the colours to the rear connector (Huawei: CAN-L top /
+  white, CAN-H bottom / black), or let the harness tell by trial.
 - Display: TFT **with touch** on a single flex into a ZIF socket (the
   touch lines share the flex; a resistive layer read by the C3 is the
   likely construction). Confirmed 2026-10-25: the "Exit" button of the
@@ -104,8 +111,8 @@ AC input (226 V), or the simulator. Register 0x75 (output voltage) read
   reversed in the tables, or the module simply in standby); the standby
   register check on the first master run decides. The 4-pin connector is
   the **clean interception point**: an adapter lead keeps red/black on the
-  module's rail and routes yellow/green to the gateway or repeater channel
-  instead of the module - no cutting, reversible. The same red/black rail
+  module's rail (and the fan line) and routes yellow/green to the gateway
+  or repeater channel instead of the module - no cutting, reversible. The same red/black rail
   can power a T-CAN485 (5-12 V in) once measured. CAN-H/L: trace from the
   transceiver's pins 7 (CAN-H) / 6 (CAN-L) to the connector, or let the
   harness tell by trial.
