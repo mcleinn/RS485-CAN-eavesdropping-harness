@@ -160,7 +160,18 @@ def _save_huawei(cfg: dict, hcfg: dict) -> None:
 
 def cmd_huawei(args) -> int:
     """Huawei R48xx rectifier control over CAN (docs/CAN-PLAN.md 3.6)."""
-    _arm_deadline(getattr(args, 'max_seconds', None), 'huawei')
+    # the hard process deadline guards one-shot commands against a wedged
+    # adapter; the long-running modes get it only as duration + margin (measured
+    # 2026-10-25: a gateway meant to run an hour died at the 240 s default)
+    long_running = args.sub in ("gateway", "hold", "sim", "frontend-sim")
+    deadline = getattr(args, "max_seconds", None)
+    if long_running:
+        dur = getattr(args, "duration", None)
+        if dur:
+            deadline = dur + 60 if deadline in (None, 240) else deadline
+        elif deadline == 240:
+            deadline = 0
+    _arm_deadline(deadline, 'huawei')
     from .analyzer.huawei import HuaweiClient, huawei_config
     from .runner import load_config, save_config
     from .protocols.huawei_r48xx import regs as HR

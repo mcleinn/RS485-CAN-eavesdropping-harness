@@ -248,6 +248,12 @@ the board's last defaults (50.0 V, raw 210) are to be replaced.
   raw 53658).** Verification by fallback: 10 s hold at 50.0 V, 75 s silence
   (heartbeats every 0.375 s, no error frames), then 0x85 = **52.375 V** and
   0x76 = 0. Both persistent defaults of unit 1 are now 52.4 V / 0 A.
+- Harness defect found: the 240 s default process deadline of one-shot
+  `huawei` commands also killed the long gateway runs ("[deadline] huawei
+  exceeded --max-seconds=240"); every "one hour" gateway run today lasted
+  4 minutes. Fixed: `gateway`/`hold`/`sim`/`frontend-sim` get the deadline
+  only as duration + 60 s, none without a duration (`--max-seconds` still
+  overrides). Until the fix: `--max-seconds 0`.
 - Open: who controls the fan under load (board PWM vs module); standby
   semantics and heartbeat byte 3 on this model; the 11-bit identifier
   quirk; meaning of 0x76 = 127 while the board was in control (0x76 does follow the stored default: 210 before, 0 after B3.0); the state change at +26 s.
