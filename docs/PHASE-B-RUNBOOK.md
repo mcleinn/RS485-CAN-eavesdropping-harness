@@ -205,6 +205,13 @@ the board's last defaults (50.0 V, raw 210) are to be replaced.
   R4850G2 it echoes the raw); the current limit is verified with a load
   only. Earlier the 0x76 value changed 210 -> 127 at the unexplained state
   change ~26 s into the first gateway run.
+- Gateway with setpoints as the steady state: `rsh huawei gateway --port
+  can:gs:0.0 --front-end can:gs:0.1 --voltage 50.0 --current 10
+  --display-voltage-0x85`: our writes acked every cycle, board writes
+  blocked, 0x85 read after every burst and relayed in the 0x75 frame (two
+  records per substitution). **User confirms the screen shows 50 V and 0 A
+  in the output fields** - the first time this board ever displayed the
+  module's real voltage; its "set" fields stay its own 48.0 V / 15.0 A.
 - Open: who controls the fan under load (board PWM vs module); standby
   semantics and heartbeat byte 3 on this model; the 11-bit identifier
   quirk; meaning of 0x76 = 127; the state change at +26 s.
