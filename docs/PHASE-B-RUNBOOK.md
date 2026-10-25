@@ -244,6 +244,10 @@ the board's last defaults (50.0 V, raw 210) are to be replaced.
   itself; ceasing the setpoint writes while polling is not enough. 0x76
   reads the stored default exactly while offline (210, then 0) but 127 for
   an online raw of 148: relation open until the load test.
+- **B3.0 completed: `set --voltage 52.4 --persist --apply` acked (reg 0x01 =
+  raw 53658).** Verification by fallback: 10 s hold at 50.0 V, 75 s silence
+  (heartbeats every 0.375 s, no error frames), then 0x85 = **52.375 V** and
+  0x76 = 0. Both persistent defaults of unit 1 are now 52.4 V / 0 A.
 - Open: who controls the fan under load (board PWM vs module); standby
   semantics and heartbeat byte 3 on this model; the 11-bit identifier
   quirk; meaning of 0x76 = 127 while the board was in control (0x76 does follow the stored default: 210 before, 0 after B3.0); the state change at +26 s.

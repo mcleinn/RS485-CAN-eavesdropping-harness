@@ -40,7 +40,7 @@ Two units were bought. Only unit 1 has been on the bench so far.
 | Heartbeat byte 3 | was 1 ("output disabled" per the community tables) while the output measured 49.9 V - on this model the byte means something else; the harness's offline tracker must not trust it alone |
 | Module-originated frames | `0x108081FE 01 13 00 01 ..` every 3 s and `0x100011FE 00 02 ..` every 3 s come from the **module**, not from the board (seen on the module-only channel) |
 | First control | `set --voltage 51.0 --apply` -> ack ok, 0x85 = 50.966 V (verify OK); `set --standby 0 --apply` acked (no visible change: the output was on). Current setpoints: conservative scale bound for this serial, 20 A cap; the first attempt was refused by a false "no ACK" on the identity request (adapter start-up issue, see runbook log) |
-| Stored defaults as left by the board | 49.98 V (0xC7ED), current raw 210 - the terminals carry 49.96 V with nothing connected |
+| Stored defaults | as delivered by the board: 49.98 V (0xC7ED), current raw 210. **Set 2026-10-25 (B3.0): 52.4 V / 0 A**, verified by fallback after 75 s of silence (0x85 = 52.375 V, 0x76 = 0). The terminals carry the default voltage with nothing connected; with 0 A no current can flow until a controller writes a limit |
 
 Voltage figures elsewhere in this document are board setpoints (48.0 V
 online, 50.0 V default, limits 42-59 V), the AC input (226-243 V), or the
