@@ -321,6 +321,19 @@ reached. It is **not** an HTTP configuration portal on any port we probed
 (80, 81, 1234, 1883, 3000, 4180, 8000, 8060, 8080, 8081, 9600, 9999 — all
 closed on 192.168.251.15).
 
+### 3.4.3 The builder's app is a WeChat mini-program (found 2026-10-25)
+
+A press on the charger's screen shows a QR code with
+`https://mp.weixin.qq.com/a/~BPBqOGAJIYm_eAvtP_yMpQ~~`. Links of this form
+are WeChat mini-program codes: they open only inside WeChat (scan with
+WeChat's scanner), never in a browser. So the control panel is a WeChat
+mini-program talking to the board over BLE (service FFE0) with the 123456
+login; its WiFi-setup step is the likely origin of the board's probing for
+the SSID `123456J`. It is the legitimate place to change the board's own
+setpoints (the blue fields), nickname, WiFi, and possibly a display-only
+mode. Under the gateway those setpoints change only what the board wishes
+and displays, never what the module gets. Not opened yet (needs WeChat).
+
 ### 3.5 WiFi
 
 Icon on screen, but no access point visible on the phone or the notebook:
